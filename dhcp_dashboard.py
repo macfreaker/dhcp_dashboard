@@ -182,8 +182,8 @@ def dashboard():
             padding: 20px;
         }
         body { font-family: Arial, sans-serif; }
-        table { border-collapse: collapse; width: 100%; }
-        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        table { border-collapse: collapse; width: 50%; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: center; }
         th { background-color: #f2f2f2; }
         input[type="text"] { width: 200px; margin-bottom: 10px; }
         .flash { padding: 10px; background-color: #f0f0f0; margin-bottom: 20px; white-space: pre-wrap; }
