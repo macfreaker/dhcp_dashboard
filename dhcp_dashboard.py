@@ -160,36 +160,44 @@ def dashboard():
     hosts = read_dhcp_hosts()
     return render_template_string('''
 <!DOCTYPE html>
-<html>
-  <head>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DHCP/DNS Dashboard</title>
     <style>
-      body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
-      table { border-collapse: collapse; width: 50%; }
-      th, td { border: 1px solid #ddd; padding: 8px; text-align: center; }
-      th { background-color: #f2f2f2; }
-      input[type="text"] { width: 200px; margin-bottom: 10px; }
-      .flash { padding: 10px; background-color: #f0f0f0; margin-bottom: 20px; white-space: pre-wrap; }
-      .danger { background-color: #ffdddd; color: #f44336; }
-       .form-container {
+        html, body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+        }
+        .page-container {
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+        }
+        .content-wrap {
+            flex: 1 0 auto;
+            padding: 20px;
+        }
+        body { font-family: Arial, sans-serif; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        input[type="text"] { width: 200px; margin-bottom: 10px; }
+        .flash { padding: 10px; background-color: #f0f0f0; margin-bottom: 20px; white-space: pre-wrap; }
+        .danger { background-color: #ffdddd; color: #f44336; }
+        .form-container {
             background-color: #f2f2f2;
             padding: 2rem;
             border-radius: 8px;
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
             width: 300px;
         }
-        h2 {
-            color: #333;
-            margin-bottom: 1.5rem;
-        }
-        form {
-            display: flex;
-            flex-direction: column;
-        }
-        label {
-            margin-bottom: 0.5rem;
-            color: #555;
-        }
+        h2 { color: #333; margin-bottom: 1.5rem; }
+        form { display: flex; flex-direction: column; }
+        label { margin-bottom: 0.5rem; color: #555; }
         input[type="text"] {
             padding: 0.5rem;
             margin-bottom: 1rem;
@@ -197,91 +205,115 @@ def dashboard():
             border-radius: 14px;
         }
         input[type="submit"] {
-            background-color:#343f48 ;
+            background-color:#343f48;
             color: #ffd700;
             padding: 0.75rem;
-            border: none; border-radius: 10px;
-            border-radius: 8px;
+            border: none;
+            border-radius: 10px;
             cursor: pointer;
             font-size: 1rem;
             transition: background-color 0.3s;
         }
-        input[type="submit"]:hover {
-            background-color: #45a049;
+        input[type="submit"]:hover { background-color: #45a049; }
+        .footer {
+            flex-shrink: 0;
+            background-color: #505e6b;
+            color: #ffffff;
+            text-align: center;
+            padding: 10px;
+            font-size: 20px;
         }
     </style>
-  </head>
-  <body>
-    <h1>DHCP/DNS Dashboard</h1>
-    {% with messages = get_flashed_messages() %} {% if messages %} {% for
-    message in messages %}
-    <div class="flash">{{ message }}</div>
-    {% endfor %} {% endif %} {% endwith %}
-    <h2>Current DHCP Hosts</h2>
-    <table>
-      <tr>
-        <th>MAC Address</th>
-        <th>Hostname</th>
-        <th>IP Address</th>
-        <th>Action</th>
-      </tr>
-      {% for mac, hostname, ip in hosts %}
-      <tr>
-        <td>{{ mac }}</td>
-        <td>{{ hostname }}</td>
-        <td>{{ ip if ip else 'Dynamic' }}</td>
-        <td>
-          <form
-            method="get"
-            action="{{ url_for('edit_host') }}"
-            style="display: inline;"
-          >
-            <input type="hidden" name="mac" value="{{ mac }}" />
-            <input type="submit" value="Edit" />
-          </form>
-          <form
-            method="post"
-            action="{{ url_for('remove_host') }}"
-            style="display: inline;"
-          >
-            <input type="hidden" name="mac" value="{{ mac }}" />
-            <input type="submit" value="Remove" />
-          </form>
-        </td>
-      </tr>
-      {% endfor %}
-    </table><br>
-     <div class="form-container">
-    <h2>Add New Host</h2>
-    <form method="post">
-      <input type="hidden" name="action" value="add" />
-      MAC Address: <input type="text" name="mac" required /><br />
-      Hostname: <input type="text" name="hostname" required /><br />
-      IP Address (optional): <input type="text" name="ip" /><br />
-      <input type="submit" value="Add Host" />
-    </form>
-    </div>
-    <h2>DNSMASQ Management</h2>
-    <form method="post" style="display: inline;">
-      <input type="hidden" name="action" value="restart" />
-      <input type="submit" value="Restart DNSMASQ" />
-    </form>
-    <form method="post" style="display: inline; margin-left: 10px;">
-      <input type="hidden" name="action" value="backup" />
-      <input type="submit" value="Backup Configuration" />
-    </form>
-    <form method="post" style="display: inline; margin-left: 10px;">
-      <input type="hidden" name="action" value="status" />
-      <input type="submit" value="Check DNSMASQ Status" />
-    </form>
-    <h2>System Management</h2>
-    <form method="post" style="display: inline;">
-      <input type="hidden" name="action" value="shutdown" />
-      <input type="submit" value="Shutdown Raspberry Pi" class="danger" />
-    </form>
-  </body>
-</html>
+</head>
+<body>
+    <div class="page-container">
+        <div class="content-wrap">
+            <h1>DHCP/DNS Dashboard</h1>
+            {% with messages = get_flashed_messages() %}
+                {% if messages %}
+                    {% for message in messages %}
+                        <div class="flash">{{ message }}</div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+            
+            <h2>Current DHCP Hosts</h2>
+            <table>
+                <tr>
+                    <th>MAC Address</th>
+                    <th>Hostname</th>
+                    <th>IP Address</th>
+                    <th>Action</th>
+                </tr>
+                {% for mac, hostname, ip in hosts %}
+                <tr>
+                    <td>{{ mac }}</td>
+                    <td>{{ hostname }}</td>
+                    <td>{{ ip if ip else 'Dynamic' }}</td>
+                    <td>
+                        <form method="get" action="{{ url_for('edit_host') }}" style="display: inline;">
+                            <input type="hidden" name="mac" value="{{ mac }}" />
+                            <input type="submit" value="Edit" />
+                        </form>
+                        <form onsubmit="return confirmRemove('{{ hostname }}')" method="post" action="{{ url_for('remove_host') }}" style="display: inline;">
+                            <input type="hidden" name="mac" value="{{ mac }}" />
+                            <input type="submit" value="Remove" />
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </table><br>
+            
+            <div class="form-container">
+                <h2>Add New Host</h2>
+                <form method="post">
+                    <input type="hidden" name="action" value="add" />
+                    <label for="mac">MAC Address:</label>
+                    <input type="text" id="mac" name="mac" required />
+                    <label for="hostname">Hostname:</label>
+                    <input type="text" id="hostname" name="hostname" required />
+                    <label for="ip">IP Address (optional):</label>
+                    <input type="text" id="ip" name="ip" />
+                    <input type="submit" value="Add Host" />
+                </form>
+            </div>
+            
+            <h2>DNSMASQ Management</h2>
+            <form method="post" style="display: inline;">
+                <input type="hidden" name="action" value="restart" />
+                <input type="submit" value="Restart DNSMASQ" />
+            </form>
+            <form method="post" style="display: inline; margin-left: 10px;">
+                <input type="hidden" name="action" value="backup" />
+                <input type="submit" value="Backup Configuration" />
+            </form>
+            <form method="post" style="display: inline; margin-left: 10px;">
+                <input type="hidden" name="action" value="status" />
+                <input type="submit" value="Check DNSMASQ Status" />
+            </form>
+            
+            <h2>System Management</h2>
+            <form method="post" style="display: inline;">
+                <input type="hidden" name="action" value="shutdown" />
+                <input type="submit" value="Shutdown Raspberry Pi" class="danger" />
+            </form>
+        </div>
+        
+        <footer class="footer">
+            <p>&copy; <span id="current-year"></span> JPHsystems. All rights reserved.</p>
+        </footer>
 
+        <script>
+            document.getElementById('current-year').textContent = new Date().getFullYear();
+                                  
+            function confirmRemove(hostname) {
+                return confirm(`Are you sure you want to remove the host "${hostname}"?`);
+            }
+
+        </script>
+    </div>
+</body>
+</html>
     ''', hosts=hosts)
 
 @app.route('/edit', methods=['GET', 'POST'])
@@ -354,7 +386,7 @@ def edit_host():
             padding: 0.5rem;
             margin-bottom: 1rem;
             border: 1px solid #ddd;
-            border-radius: 4px;
+            border-radius: 14px;
             width: 100%;
             box-sizing: border-box;
         }
