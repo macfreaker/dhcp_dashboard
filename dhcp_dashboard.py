@@ -240,6 +240,7 @@ def dashboard():
 
                         input[type=button], input[type=submit], input[type=reset] {
                         background-color: #343f48;
+                        color: #ffd700;
                         font-size: 14px;
                         border: none; border-radius: 10px;
                         color: white;
