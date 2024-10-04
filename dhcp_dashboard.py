@@ -6,75 +6,66 @@ import shutil
 from datetime import datetime
 import logging
 import os
+import time
 
 app = Flask(__name__)
-app.secret_key = "your_secret_key_here"  # Replace with a real secret key
+app.secret_key = 'your_secret_key_here'  # Replace with a real secret key
 
-DNSMASQ_CONF = "/etc/dnsmasq.conf"
+DNSMASQ_CONF = '/etc/dnsmasq.conf'
+WPA_SUPPLICANT_CONF = '/etc/wpa_supplicant/wpa_supplicant.conf'
 
-logging.basicConfig(filename="dhcp_dashboard.log", level=logging.DEBUG)
-
+logging.basicConfig(filename='dhcp_dashboard.log', level=logging.DEBUG)
 
 def read_dhcp_hosts():
     try:
-        with open(DNSMASQ_CONF, "r") as f:
+        with open(DNSMASQ_CONF, 'r') as f:
             content = f.read()
-        hosts = re.findall(r"dhcp-host=([\w:]+),([\w.-]+)(?:,([\d.]+))?", content)
+        hosts = re.findall(r'dhcp-host=([\w:]+),([\w.-]+)(?:,([\d.]+))?', content)
         logging.info(f"Read {len(hosts)} hosts from configuration")
         return hosts
     except Exception as e:
         logging.error(f"Error reading DHCP hosts: {str(e)}")
         return []
 
-
 def write_dhcp_hosts(hosts):
     try:
-        with open(DNSMASQ_CONF, "r") as f:
+        with open(DNSMASQ_CONF, 'r') as f:
             content = f.readlines()
-
-        new_content = [line for line in content if not line.startswith("dhcp-host=")]
+        
+        new_content = [line for line in content if not line.startswith('dhcp-host=')]
         for mac, hostname, ip in hosts:
             if ip:
-                new_content.append(f"dhcp-host={mac},{hostname},{ip}\n")
+                new_content.append(f'dhcp-host={mac},{hostname},{ip}\n')
             else:
-                new_content.append(f"dhcp-host={mac},{hostname}\n")
-
-        with open(DNSMASQ_CONF, "w") as f:
+                new_content.append(f'dhcp-host={mac},{hostname}\n')
+        
+        with open(DNSMASQ_CONF, 'w') as f:
             f.writelines(new_content)
-
+        
         logging.info(f"Wrote {len(hosts)} hosts to configuration")
     except Exception as e:
         logging.error(f"Error writing DHCP hosts: {str(e)}")
         raise
 
-
 def restart_dnsmasq():
     try:
-        result = subprocess.run(
-            ["sudo", "systemctl", "restart", "dnsmasq"], capture_output=True, text=True
-        )
+        result = subprocess.run(['sudo', 'systemctl', 'restart', 'dnsmasq'], capture_output=True, text=True)
         if result.returncode != 0:
             status_output = get_dnsmasq_status()
-            logging.error(
-                f"Error restarting DNSMASQ: {result.stderr}\nStatus: {status_output}"
-            )
+            logging.error(f"Error restarting DNSMASQ: {result.stderr}\nStatus: {status_output}")
             raise Exception(f"Failed to restart DNSMASQ. Status: {status_output}")
         logging.info("DNSMASQ restarted successfully")
     except Exception as e:
         logging.error(f"Exception when restarting DNSMASQ: {str(e)}")
         raise
 
-
 def get_dnsmasq_status():
     try:
-        result = subprocess.run(
-            ["sudo", "systemctl", "status", "dnsmasq"], capture_output=True, text=True
-        )
+        result = subprocess.run(['sudo', 'systemctl', 'status', 'dnsmasq'], capture_output=True, text=True)
         return result.stdout
     except Exception as e:
         logging.error(f"Error getting DNSMASQ status: {str(e)}")
         return "Unable to get DNSMASQ status"
-
 
 def backup_dnsmasq_conf():
     try:
@@ -87,29 +78,60 @@ def backup_dnsmasq_conf():
         logging.error(f"Error creating backup: {str(e)}")
         raise
 
-
 def shutdown_pi():
     os.system("sudo shutdown -h now")
 
 
-@app.route("/", methods=["GET", "POST"])
+def update_wifi_settings(ssid, password):
+    try:
+        wpa_config = f'''
+                ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+                update_config=1
+                country=BE
+
+                network={{
+                    ssid="{ssid}"
+                    psk="{password}"
+                }}
+        '''
+        with open(WPA_SUPPLICANT_CONF, 'w') as f:
+            f.write(wpa_config)
+        
+        # Restart the Wi-Fi interface
+        subprocess.run(['sudo', 'ifconfig', 'wlan0', 'down'], check=True)
+        time.sleep(1)
+        subprocess.run(['sudo', 'ifconfig', 'wlan0', 'up'], check=True)
+        time.sleep(2)
+        subprocess.run(['sudo', 'wpa_cli', '-i', 'wlan0', 'reconfigure'], check=True)
+        
+        # Wait for the connection to be established
+        for _ in range(30):  # Wait up to 30 seconds
+            result = subprocess.run(['iwgetid', '-r'], capture_output=True, text=True)
+            if result.stdout.strip() == ssid:
+                logging.info(f"Successfully connected to Wi-Fi network: {ssid}")
+                return True
+            time.sleep(1)
+        
+        logging.error(f"Failed to connect to Wi-Fi network: {ssid}")
+        return False
+    except Exception as e:
+        logging.error(f"Error updating Wi-Fi settings: {str(e)}")
+        return False
+
+@app.route('/', methods=['GET', 'POST'])
 def dashboard():
-    if request.method == "POST":
-        action = request.form.get("action")
-        if action == "add":
+    if request.method == 'POST':
+        action = request.form.get('action')
+        if action == 'add':
             try:
-                mac = request.form.get("mac")
-                hostname = request.form.get("hostname")
-                ip = request.form.get("ip") or None
+                mac = request.form.get('mac')
+                hostname = request.form.get('hostname')
+                ip = request.form.get('ip') or None
                 hosts = read_dhcp_hosts()
                 if any(h[0] == mac for h in hosts):
-                    flash(
-                        f"MAC address {mac} already exists. Edit the existing entry to update."
-                    )
+                    flash(f"MAC address {mac} already exists. Edit the existing entry to update.")
                 elif any(h[1] == hostname for h in hosts):
-                    flash(
-                        f"Hostname {hostname} already exists. Choose a different hostname."
-                    )
+                    flash(f"Hostname {hostname} already exists. Choose a different hostname.")
                 else:
                     hosts.append((mac, hostname, ip))
                     write_dhcp_hosts(hosts)
@@ -118,24 +140,23 @@ def dashboard():
             except Exception as e:
                 flash(f"Error adding host: {str(e)}")
                 logging.error(f"Error adding host: {str(e)}")
-        elif action == "restart":
+        elif action == 'restart':
             try:
                 restart_dnsmasq()
                 flash("DNSMASQ service restarted.")
             except Exception as e:
                 flash(f"Error restarting DNSMASQ: {str(e)}")
-        elif action == "backup":
+        elif action == 'backup':
             try:
                 backup_file = backup_dnsmasq_conf()
                 flash(f"Backup created: {backup_file}")
             except Exception as e:
                 flash(f"Error creating backup: {str(e)}")
-        elif action == "status":
+        elif action == 'status':
             status = get_dnsmasq_status()
             flash(f"DNSMASQ Status:\n{status}")
-        elif action == "shutdown":
-            return render_template_string(
-                """
+        elif action == 'shutdown':
+            return render_template_string('''
                 <!DOCTYPE html>
                 <html>
                 <head>
@@ -170,15 +191,20 @@ def dashboard():
                     <a href="{{ url_for('dashboard') }}">Cancel</a>
                 </body>
                 </html>
-            """
-            )
-        elif action == "confirm_shutdown":
+            ''')
+        elif action == 'confirm_shutdown':
             flash("Shutting down the Raspberry Pi...")
             shutdown_pi()
-
+        elif action == 'wifi':
+            ssid = request.form.get('ssid')
+            password = request.form.get('password')
+            if update_wifi_settings(ssid, password):
+                flash("Wi-Fi settings updated successfully. The Raspberry Pi has connected to the new network.", "success")
+            else:
+                flash("Failed to update Wi-Fi settings or connect to the new network.", "error")
+    
     hosts = read_dhcp_hosts()
-    return render_template_string(
-        """
+    return render_template_string('''
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -243,6 +269,46 @@ def dashboard():
             padding: 10px;
             font-size: 20px;
         }
+        
+        .form-container-wrapper {
+            display: flex;
+            justify-content: space-between;
+            gap: 20px; /* Adds space between the containers */
+            max-width: 650px; /* Adjust this value as needed */
+            margin-left: 0;                      
+        }
+
+        .form-container {
+            flex: 1; /* Makes both containers take up equal width */
+            background-color: #f2f2f2;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        input[type="text"], input[type="password"] {
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .form-container input[type="text"],
+        .form-container input[type="password"] {
+            width: 100%;
+            padding: 0.5rem;
+            margin-bottom: 1rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+
+        @media (max-width: 650px) {
+            .form-container-wrapper {
+                flex-direction: column;
+            }
+            
+            .form-container {
+                flex: 1 1 auto;                  
+                max-width: none;
+            }
+        }                          
     </style>
 </head>
 <body>
@@ -284,18 +350,32 @@ def dashboard():
                 {% endfor %}
             </table><br>
             
-            <div class="form-container">
-                <h2>Add New Host</h2>
-                <form method="post">
-                    <input type="hidden" name="action" value="add" />
-                    <label for="mac">MAC Address:</label>
-                    <input type="text" id="mac" name="mac" required />
-                    <label for="hostname">Hostname:</label>
-                    <input type="text" id="hostname" name="hostname" required />
-                    <label for="ip">IP Address (optional):</label>
-                    <input type="text" id="ip" name="ip" />
-                    <input type="submit" value="Add Host" />
-                </form>
+            <div class="form-container-wrapper">
+                <div class="form-container">
+                    <h2>Add New Host</h2>
+                    <form method="post">
+                        <input type="hidden" name="action" value="add" />
+                        <label for="mac">MAC Address:</label>
+                        <input type="text" id="mac" name="mac" required />
+                        <label for="hostname">Hostname:</label>
+                        <input type="text" id="hostname" name="hostname" required />
+                        <label for="ip">IP Address (optional):</label>
+                        <input type="text" id="ip" name="ip" />
+                        <input type="submit" value="Add Host" />
+                    </form>
+                </div>
+                
+                <div class="form-container">
+                    <h2>Wi-Fi Configuration</h2>
+                    <form method="post">
+                        <input type="hidden" name="action" value="wifi">
+                        <label for="ssid">Wi-Fi SSID:</label>
+                        <input type="text" id="ssid" name="ssid" required>
+                        <label for="password">Wi-Fi Password:</label>
+                        <input type="password" id="password" name="password" required>
+                        <input type="submit" value="Update Wi-Fi Settings">
+                    </form>
+                </div>
             </div>
             
             <h2>DNSMASQ Management</h2>
@@ -311,6 +391,8 @@ def dashboard():
                 <input type="hidden" name="action" value="status" />
                 <input type="submit" value="Check DNSMASQ Status" />
             </form>
+                                  
+                     
             
             <h2>System Management</h2>
             <form method="post" style="display: inline;">
@@ -334,43 +416,37 @@ def dashboard():
     </div>
 </body>
 </html>
-    """,
-        hosts=hosts,
-    )
+    ''', hosts=hosts)
 
-
-@app.route("/edit", methods=["GET", "POST"])
+@app.route('/edit', methods=['GET', 'POST'])
 def edit_host():
-    if request.method == "POST":
-        old_mac = request.form.get("old_mac")
-        new_mac = request.form.get("new_mac")
-        new_hostname = request.form.get("new_hostname")
-        new_ip = request.form.get("new_ip") or None
-
+    if request.method == 'POST':
+        old_mac = request.form.get('old_mac')
+        new_mac = request.form.get('new_mac')
+        new_hostname = request.form.get('new_hostname')
+        new_ip = request.form.get('new_ip') or None
+        
         hosts = read_dhcp_hosts()
-        updated_hosts = [
-            (new_mac, new_hostname, new_ip) if h[0] == old_mac else h for h in hosts
-        ]
-
+        updated_hosts = [(new_mac, new_hostname, new_ip) if h[0] == old_mac else h for h in hosts]
+        
         if hosts == updated_hosts:
             flash("No changes were made.")
         else:
             write_dhcp_hosts(updated_hosts)
             restart_dnsmasq()
             flash("Host updated successfully.")
-
-        return redirect(url_for("dashboard"))
-
-    mac = request.args.get("mac")
+        
+        return redirect(url_for('dashboard'))
+    
+    mac = request.args.get('mac')
     hosts = read_dhcp_hosts()
     host = next((h for h in hosts if h[0] == mac), None)
-
+    
     if not host:
         flash("Host not found.")
-        return redirect(url_for("dashboard"))
-
-    return render_template_string(
-        """
+        return redirect(url_for('dashboard'))
+    
+    return render_template_string('''
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -462,15 +538,12 @@ def edit_host():
     </div>
 </body>
 </html>
-    """,
-        host=host,
-    )
+    ''', host=host)
 
-
-@app.route("/remove", methods=["POST"])
+@app.route('/remove', methods=['POST'])
 def remove_host():
     try:
-        mac = request.form.get("mac")
+        mac = request.form.get('mac')
         hosts = read_dhcp_hosts()
         original_count = len(hosts)
         hosts = [h for h in hosts if h[0] != mac]
@@ -485,8 +558,7 @@ def remove_host():
     except Exception as e:
         flash(f"Error removing host: {str(e)}")
         logging.error(f"Error removing host: {str(e)}")
-    return redirect(url_for("dashboard"))
+    return redirect(url_for('dashboard'))
 
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8080)
