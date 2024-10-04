@@ -1,5 +1,5 @@
 import flask
-from flask import Flask, request, render_template_string, flash, redirect, url_for
+from flask import Flask, request, render_template_string, flash, redirect, url_for, jsonify, send_file
 import subprocess
 import re
 import shutil
@@ -13,6 +13,7 @@ app.secret_key = 'your_secret_key_here'  # Replace with a real secret key
 
 DNSMASQ_CONF = '/etc/dnsmasq.conf'
 WPA_SUPPLICANT_CONF = '/etc/wpa_supplicant/wpa_supplicant.conf'
+LOG_FILE = 'dhcp_dashboard.log'
 
 logging.basicConfig(filename='dhcp_dashboard.log', level=logging.DEBUG)
 
@@ -118,6 +119,76 @@ def update_wifi_settings(ssid, password):
         logging.error(f"Error updating Wi-Fi settings: {str(e)}")
         return False
 
+@app.route('/api/hosts', methods=['GET'])
+def api_get_hosts():
+    hosts = read_dhcp_hosts()
+    return jsonify([{'mac': mac, 'hostname': hostname, 'ip': ip} for mac, hostname, ip in hosts])
+
+@app.route('/api/hosts', methods=['POST'])
+def api_add_host():
+    data = request.json
+    if not data or 'mac' not in data or 'hostname' not in data:
+        return jsonify({'error': 'Missing required fields'}), 400
+    
+    mac = data['mac']
+    hostname = data['hostname']
+    ip = data.get('ip')
+    
+    hosts = read_dhcp_hosts()
+    if any(h[0] == mac for h in hosts):
+        return jsonify({'error': 'MAC address already exists'}), 400
+    if any(h[1] == hostname for h in hosts):
+        return jsonify({'error': 'Hostname already exists'}), 400
+    
+    hosts.append((mac, hostname, ip))
+    try:
+        write_dhcp_hosts(hosts)
+        restart_dnsmasq()
+        return jsonify({'message': 'Host added successfully'}), 201
+    except Exception as e:
+        logging.error(f"Error adding host via API: {str(e)}")
+        return jsonify({'error': 'Failed to add host'}), 500
+
+@app.route('/api/hosts/<mac>', methods=['DELETE'])
+def api_remove_host(mac):
+    hosts = read_dhcp_hosts()
+    original_count = len(hosts)
+    hosts = [h for h in hosts if h[0] != mac]
+    if len(hosts) == original_count:
+        return jsonify({'error': 'Host not found'}), 404
+    
+    try:
+        write_dhcp_hosts(hosts)
+        restart_dnsmasq()
+        return jsonify({'message': 'Host removed successfully'}), 200
+    except Exception as e:
+        logging.error(f"Error removing host via API: {str(e)}")
+        return jsonify({'error': 'Failed to remove host'}), 500
+
+@app.route('/api/logs', methods=['GET'])
+def api_get_logs():
+    lines = request.args.get('lines', default=50, type=int)
+    try:
+        with open(LOG_FILE, 'r') as file:
+            log_contents = file.readlines()
+        
+        # Get the last 'lines' number of log entries
+        last_logs = log_contents[-lines:]
+        
+        return jsonify({'logs': last_logs})
+    except Exception as e:
+        logging.error(f"Error reading log file: {str(e)}")
+        return jsonify({'error': 'Failed to read log file'}), 500
+
+@app.route('/api/logs/download', methods=['GET'])
+def api_download_logs():
+    try:
+        return send_file(LOG_FILE, as_attachment=True)
+    except Exception as e:
+        logging.error(f"Error downloading log file: {str(e)}")
+        return jsonify({'error': 'Failed to download log file'}), 500
+
+
 @app.route('/', methods=['GET', 'POST'])
 def dashboard():
     if request.method == 'POST':
@@ -177,7 +248,7 @@ def dashboard():
                         margin: 4px 2px;
                         cursor: pointer;
                     }
-
+                    
                     </style>
                 </head>
                 <body>
@@ -189,6 +260,7 @@ def dashboard():
                         <input type="submit" value="Yes, Shut Down">
                     </form><br>
                     <a href="{{ url_for('dashboard') }}">Cancel</a>
+                
                 </body>
                 </html>
             ''')
@@ -561,4 +633,5 @@ def remove_host():
     return redirect(url_for('dashboard'))
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080)
+    app.run(host='0.0.0.0', port=8080, debug=True)
+    app.config['FORCE_JSON'] = True
