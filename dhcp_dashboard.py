@@ -249,6 +249,7 @@ def dashboard():
                         margin: 4px 2px;
                         cursor: pointer;
                     }
+                    input[type="submit"]:hover { background-color: #45a049; }
                     
                     </style>
                 </head>
