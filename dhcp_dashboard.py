@@ -249,7 +249,7 @@ def dashboard():
                         margin: 4px 2px;
                         cursor: pointer;
                     }
-                    input[type="submit"]:hover { background-color: #45a049; }
+                    input[type="submit"]:hover { background-color: red; color: yellow; font-weight: bold; }
                     
                     </style>
                 </head>
@@ -302,9 +302,6 @@ def dashboard():
             padding: 20px;
         }
         body { font-family: Arial, sans-serif; }
-        table { border-collapse: collapse; width: 50%; }
-        th, td { border: 1px solid #ddd; padding: 8px; text-align: center; }
-        th { background-color: #f2f2f2; }
         input[type="text"] { width: 200px; margin-bottom: 10px; }
         .flash { padding: 10px; background-color: #f0f0f0; margin-bottom: 20px; white-space: pre-wrap; }
         .danger { background-color: #ffdddd; color: #f44336; }
@@ -382,7 +379,134 @@ def dashboard():
                 flex: 1 1 auto;                  
                 max-width: none;
             }
-        }                          
+        }
+            .responsive-table {
+        width: 100%;
+        margin-bottom: 20px;
+        overflow-x: auto;
+        }
+        table {
+            width: 100%;
+            min-width: 600px; /* Ensures table doesn't get too narrow */
+            border-collapse: collapse;
+            
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+            text-align: center;
+        }
+        th {
+            background-color: #343f48;
+            color: #ffd700;
+            white-space: nowrap;
+        }
+        tr:nth-child(even) {
+            background-color: #f2f2f2;
+        }
+        .action-buttons {
+            display: flex;
+            gap: 5px;
+        }
+        .action-buttons input[type="submit"] {
+            padding: 5px 10px;
+            font-size: 0.9em;
+        }
+        
+        @media screen and (max-width: 600px) {
+            .responsive-table {
+                overflow-x: scroll;
+            }
+            th, td {
+                padding: 8px;
+            }
+            .action-buttons {
+                flex-direction: column;
+            }
+        }
+        
+    .dhcp-hosts {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+        gap: 20px;
+        width: 100%;
+        margin-bottom: 30px; /* Increased space before Add New Host */
+    }
+    
+    .host-card {
+        background-color: #f2f2f2;
+        border-radius: 8px;
+        padding: 20px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    .host-card h3 {
+        margin-top: 0;
+        color: #343f48;
+        border-bottom: 2px solid #ffd700;
+        padding-bottom: 10px;
+        margin-bottom: 15px;
+    }
+    
+    .host-info {
+        margin-bottom: 20px;
+    }
+    
+    .host-info strong {
+        color: #343f48;
+    }
+    
+        .host-actions {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            margin-top: 15px;
+        }
+        
+        .host-actions form {
+            flex: 1;
+        }
+        
+        .host-actions input[type="submit"] {
+            width: 100%;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+        
+        .host-actions input[type="submit"]:hover {
+            opacity: 0.9;
+        }
+        
+        .edit-button {
+            background-color: #343f48;
+            color: #ffd700;
+        }
+        
+        .remove-button {
+            background-color: #e74c3c;
+            color: white;
+        }
+        
+        .host-actions input[type="submit"].remove-button:hover {
+            background-color: #ff0000;
+            color: yellow;
+        }
+    
+    .host-actions input[type="submit"]:hover {
+            background-color: #45a049;
+    
+    @media screen and (max-width: 600px) {
+        .dhcp-hosts {
+            grid-template-columns: 1fr;
+        }
+    }
+    
     </style>
 </head>
 <body>
@@ -398,32 +522,28 @@ def dashboard():
             {% endwith %}
             
             <h2>Current DHCP Hosts</h2>
-            <table>
-                <tr>
-                    <th>MAC Address</th>
-                    <th>Hostname</th>
-                    <th>IP Address</th>
-                    <th>Action</th>
-                </tr>
+            <div class="dhcp-hosts">
                 {% for mac, hostname, ip in hosts %}
-                <tr>
-                    <td>{{ mac }}</td>
-                    <td>{{ hostname }}</td>
-                    <td>{{ ip if ip else 'Dynamic' }}</td>
-                    <td>
-                        <form method="get" action="{{ url_for('edit_host') }}" style="display: inline;">
-                            <input type="hidden" name="mac" value="{{ mac }}" />
-                            <input type="submit" value="Edit" />
-                        </form>
-                        <form onsubmit="return confirmRemove('{{ hostname }}')" method="post" action="{{ url_for('remove_host') }}" style="display: inline;">
-                            <input type="hidden" name="mac" value="{{ mac }}" />
-                            <input type="submit" value="Remove" />
-                        </form>
-                    </td>
-                </tr>
+                <div class="host-card">
+                    <h3>{{ hostname }}</h3>
+                    <div class="host-info">
+                        <p><strong>MAC Address:</strong> {{ mac }}</p>
+                        <p><strong>IP Address:</strong> {{ ip if ip else 'Dynamic' }}</p>
+                    </div>
+                    <div class="host-actions">
+                    <form method="get" action="{{ url_for('edit_host') }}">
+                        <input type="hidden" name="mac" value="{{ mac }}" />
+                        <input type="submit" value="Edit" class="edit-button" />
+                    </form>
+                    <form onsubmit="return confirmRemove('{{ hostname }}')" method="post" action="{{ url_for('remove_host') }}">
+                        <input type="hidden" name="mac" value="{{ mac }}" />
+                        <input type="submit" value="Remove" class="remove-button" />
+                    </form>
+                </div>
+                </div>
                 {% endfor %}
-            </table><br>
-            
+            </div>
+            <br>
             <div class="form-container-wrapper">
                 <div class="form-container">
                     <h2>Add New Host</h2>
