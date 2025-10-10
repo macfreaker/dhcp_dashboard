@@ -525,10 +525,61 @@ log-queries
         return False
 
 
-def enable_ip_forwarding():
-    """Setup network bridging for unified local network (no internet routing)"""
+def enable_internet_sharing():
+    """Enable internet sharing from wlan1 to local network (wlan0 + eth0)"""
     try:
-        # Disable IP forwarding (no routing needed for local network)
+        # Enable IP forwarding
+        with open('/etc/sysctl.conf', 'r') as f:
+            lines = f.readlines()
+        
+        with open('/etc/sysctl.conf', 'w') as f:
+            found = False
+            for line in lines:
+                if 'net.ipv4.ip_forward' in line:
+                    f.write('net.ipv4.ip_forward=1\n')
+                    found = True
+                else:
+                    f.write(line)
+            if not found:
+                f.write('\nnet.ipv4.ip_forward=1\n')
+        
+        # Apply sysctl changes
+        subprocess.run(['sudo', 'sysctl', '-p'], check=True)
+        
+        # Configure iptables for NAT (share internet from wlan1 to local network)
+        # Clear existing rules first
+        subprocess.run(['sudo', 'iptables', '-t', 'nat', '-F'], capture_output=True)
+        subprocess.run(['sudo', 'iptables', '-F', 'FORWARD'], capture_output=True)
+        
+        # Enable NAT from wlan1
+        subprocess.run(['sudo', 'iptables', '-t', 'nat', '-A', 'POSTROUTING', '-o', 'wlan1', '-j', 'MASQUERADE'],
+                      capture_output=True)
+        
+        # Allow forwarding between interfaces
+        subprocess.run(['sudo', 'iptables', '-A', 'FORWARD', '-i', 'wlan1', '-o', 'wlan0', '-m', 'state',
+                       '--state', 'RELATED,ESTABLISHED', '-j', 'ACCEPT'], capture_output=True)
+        subprocess.run(['sudo', 'iptables', '-A', 'FORWARD', '-i', 'wlan0', '-o', 'wlan1', '-j', 'ACCEPT'],
+                      capture_output=True)
+        subprocess.run(['sudo', 'iptables', '-A', 'FORWARD', '-i', 'wlan1', '-o', 'eth0', '-m', 'state',
+                       '--state', 'RELATED,ESTABLISHED', '-j', 'ACCEPT'], capture_output=True)
+        subprocess.run(['sudo', 'iptables', '-A', 'FORWARD', '-i', 'eth0', '-o', 'wlan1', '-j', 'ACCEPT'],
+                      capture_output=True)
+        
+        # Save iptables rules
+        subprocess.run(['sudo', 'sh', '-c', 'iptables-save > /etc/iptables.ipv4.nat'],
+                      capture_output=True)
+        
+        logging.info("Internet sharing enabled (wlan1 → wlan0 + eth0)")
+        return True
+    except Exception as e:
+        logging.error(f"Error enabling internet sharing: {str(e)}")
+        return False
+
+
+def disable_internet_sharing():
+    """Disable internet sharing - isolate local network"""
+    try:
+        # Disable IP forwarding
         with open('/etc/sysctl.conf', 'r') as f:
             lines = f.readlines()
         
@@ -546,15 +597,46 @@ def enable_ip_forwarding():
         # Apply sysctl changes
         subprocess.run(['sudo', 'sysctl', '-p'], check=True)
         
-        # Clear any existing NAT rules
+        # Clear NAT rules
         subprocess.run(['sudo', 'iptables', '-t', 'nat', '-F'], capture_output=True)
-        subprocess.run(['sudo', 'iptables', '-F'], capture_output=True)
+        subprocess.run(['sudo', 'iptables', '-F', 'FORWARD'], capture_output=True)
         
-        logging.info("Configured for local network (no internet routing)")
+        # Remove saved rules
+        if os.path.exists('/etc/iptables.ipv4.nat'):
+            os.remove('/etc/iptables.ipv4.nat')
+        
+        logging.info("Internet sharing disabled - local network isolated")
         return True
     except Exception as e:
-        logging.error(f"Error enabling IP forwarding: {str(e)}")
+        logging.error(f"Error disabling internet sharing: {str(e)}")
         return False
+
+
+def get_internet_sharing_status():
+    """Check if internet sharing is currently enabled"""
+    try:
+        # Check IP forwarding status
+        result = subprocess.run(['sysctl', 'net.ipv4.ip_forward'], capture_output=True, text=True)
+        ip_forward_enabled = 'net.ipv4.ip_forward = 1' in result.stdout
+        
+        # Check if NAT rules exist
+        result = subprocess.run(['sudo', 'iptables', '-t', 'nat', '-L', 'POSTROUTING'],
+                              capture_output=True, text=True)
+        nat_configured = 'MASQUERADE' in result.stdout and 'wlan1' in result.stdout
+        
+        return {
+            'enabled': ip_forward_enabled and nat_configured,
+            'ip_forward': ip_forward_enabled,
+            'nat_rules': nat_configured
+        }
+    except Exception as e:
+        logging.error(f"Error getting internet sharing status: {str(e)}")
+        return {'enabled': False, 'ip_forward': False, 'nat_rules': False}
+
+
+def enable_ip_forwarding():
+    """Wrapper for backward compatibility - disables internet sharing by default"""
+    return disable_internet_sharing()
 
 
 def start_access_point():
@@ -803,6 +885,47 @@ class AccessPointStatus(Resource):
         '''Get Access Point status and connected clients'''
         status = get_ap_status()
         return status
+
+@ns_ap.route('/internet-sharing/status')
+class InternetSharingStatus(Resource):
+    @ns_ap.doc('get_internet_sharing_status')
+    def get(self):
+        '''Get internet sharing status'''
+        status = get_internet_sharing_status()
+        return status
+
+
+@ns_ap.route('/internet-sharing/enable')
+class InternetSharingEnable(Resource):
+    @ns_ap.doc('enable_internet_sharing')
+    @ns_ap.response(200, 'Internet sharing enabled')
+    def post(self):
+        '''Enable internet sharing from wlan1 to local network (wlan0 + eth0)'''
+        try:
+            if enable_internet_sharing():
+                return {'message': 'Internet sharing enabled successfully'}, 200
+            else:
+                api.abort(500, 'Failed to enable internet sharing')
+        except Exception as e:
+            logging.error(f"Error enabling internet sharing via API: {str(e)}")
+            api.abort(500, f'Failed to enable internet sharing: {str(e)}')
+
+
+@ns_ap.route('/internet-sharing/disable')
+class InternetSharingDisable(Resource):
+    @ns_ap.doc('disable_internet_sharing')
+    @ns_ap.response(200, 'Internet sharing disabled')
+    def post(self):
+        '''Disable internet sharing - isolate local network'''
+        try:
+            if disable_internet_sharing():
+                return {'message': 'Internet sharing disabled successfully'}, 200
+            else:
+                api.abort(500, 'Failed to disable internet sharing')
+        except Exception as e:
+            logging.error(f"Error disabling internet sharing via API: {str(e)}")
+            api.abort(500, f'Failed to disable internet sharing: {str(e)}')
+
 
 
 @ns_connections.route('')
@@ -1061,9 +1184,26 @@ def dashboard():
                     flash("Access Point is INACTIVE", "error")
             except Exception as e:
                 flash(f"Error getting AP status: {str(e)}", "error")
+        elif action == 'enable_internet':
+            try:
+                if enable_internet_sharing():
+                    flash("Internet sharing ENABLED! Devices on wlan0/eth0 can now access internet through wlan1.", "success")
+                else:
+                    flash("Failed to enable internet sharing.", "error")
+            except Exception as e:
+                flash(f"Error enabling internet sharing: {str(e)}", "error")
+        elif action == 'disable_internet':
+            try:
+                if disable_internet_sharing():
+                    flash("Internet sharing DISABLED. Local network is now isolated.", "success")
+                else:
+                    flash("Failed to disable internet sharing.", "error")
+            except Exception as e:
+                flash(f"Error disabling internet sharing: {str(e)}", "error")
 
     hosts = read_dhcp_hosts()
     ap_config = read_ap_config()
+    internet_sharing = get_internet_sharing_status()
     return render_template_string('''
 <!DOCTYPE html>
 <html lang="en">
@@ -1072,475 +1212,929 @@ def dashboard():
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DHCP/DNS Dashboard</title>
     <style>
-        html, body {
-            height: 100%;
+        * {
             margin: 0;
             padding: 0;
-            font-family: Arial, sans-serif;
+            box-sizing: border-box;
         }
-        .page-container {
+        
+        :root {
+            --primary-color: #343f48;
+            --accent-color: #ffd700;
+            --success-color: #28a745;
+            --danger-color: #dc3545;
+            --info-color: #17a2b8;
+            --warning-color: #ffc107;
+            --light-gray: #f8f9fa;
+            --border-color: #dee2e6;
+            --text-color: #333;
+            --shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        
+        html, body {
+            height: 100%;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--light-gray);
+            color: var(--text-color);
+        }
+        
+        .container {
             display: flex;
             flex-direction: column;
             min-height: 100vh;
         }
-        .content-wrap {
-            flex: 1 0 auto;
-            padding: 20px;
-        }
-        body { font-family: Arial, sans-serif; }
-        input[type="text"] { width: 200px; margin-bottom: 10px; }
-        .flash { padding: 10px; background-color: #f0f0f0; margin-bottom: 20px; white-space: pre-wrap; }
-        .danger { background-color: #ffdddd; color: #f44336; }
-        .form-container {
-            background-color: #f2f2f2;
-            padding: 2rem;
-            border-radius: 8px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            width: 300px;
-        }
-        h2 { color: #333; margin-bottom: 1.5rem; }
-        form { display: flex; flex-direction: column; }
-        label { margin-bottom: 0.5rem; color: #555; }
-        input[type="text"] {
-            padding: 0.5rem;
-            margin-bottom: 1rem;
-            border: 1px solid #ddd;
-            border-radius: 14px;
-        }
-        input[type="submit"] {
-            background-color:#343f48;
-            color: #ffd700;
-            padding: 0.75rem;
-            border: none;
-            border-radius: 10px;
-            cursor: pointer;
-            font-size: 1rem;
-            transition: background-color 0.3s;
-        }
-        input[type="submit"]:hover { background-color: #45a049; }
-        .footer {
-            flex-shrink: 0;
-            background-color: #505e6b;
-            color: #ffffff;
-            text-align: center;
-            padding: 10px;
-            font-size: 20px;
+        
+        /* Header */
+        .header {
+            background: linear-gradient(135deg, var(--primary-color), #2c3e50);
+            color: white;
+            padding: 1rem;
+            box-shadow: var(--shadow);
         }
         
-        .form-container-wrapper {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-            gap: 20px;
-            width: 100%;
-            margin-left: 0;
+        .header h1 {
+            font-size: 1.8rem;
+            font-weight: 300;
         }
-
-        .form-container {
-            flex: 1; /* Makes both containers take up equal width */
-            width: auto;
-            background-color: #f2f2f2;
-            padding: 2rem;
-            border-radius: 8px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        
+        /* Flash Messages */
+        .flash-messages {
+            padding: 1rem;
         }
-        input[type="text"], input[type="password"] {
-            width: 100%;
-            box-sizing: border-box;
-        }
-        .form-container input[type="text"],
-        .form-container input[type="password"],
-        .form-container input[type="submit"] {
-            width: 100%;
-            padding: 0.5rem;
+        
+        .flash {
+            background-color: #e9ecef;
+            border-left: 4px solid var(--info-color);
+            padding: 1rem;
             margin-bottom: 1rem;
-            border: 1px solid #ddd;
             border-radius: 4px;
-            box-sizing: border-box;
+            white-space: pre-wrap;
         }
-
-        @media (max-width: 650px) {
-            .dhcp-hosts, .form-container-wrapper {
-                grid-template-columns: 1fr;
-            }
-            
-            .host-card, .form-container {
-                max-width: none;
-                width: 100%;
-            }
+        
+        .flash.danger {
+            background-color: #f8d7da;
+            border-left-color: var(--danger-color);
+            color: #721c24;
         }
-            .responsive-table {
-        width: 100%;
-        margin-bottom: 20px;
-        overflow-x: auto;
+        
+        /* Navigation Tabs */
+        .nav-tabs {
+            background: white;
+            border-bottom: 1px solid var(--border-color);
+            box-shadow: var(--shadow);
+            overflow-x: auto;
+            white-space: nowrap;
         }
-        .action-buttons {
+        
+        .nav-tabs ul {
             display: flex;
-            gap: 5px;
-        }
-        .action-buttons input[type="submit"] {
-            padding: 5px 10px;
-            font-size: 0.9em;
-        }
-        
-        @media screen and (max-width: 600px) {
-            .responsive-table {
-                overflow-x: scroll;
-            }
-            th, td {
-                padding: 8px;
-            }
-            .action-buttons {
-                flex-direction: column;
-            }
+            list-style: none;
+            margin: 0;
+            padding: 0;
+            min-width: max-content;
         }
         
-        .dhcp-hosts, .form-container-wrapper {
+        .nav-tabs li {
+            border-right: 1px solid var(--border-color);
+        }
+        
+        .nav-tabs button {
+            background: none;
+            border: none;
+            padding: 1rem 1.5rem;
+            cursor: pointer;
+            font-size: 0.95rem;
+            color: var(--text-color);
+            transition: all 0.3s ease;
+            white-space: nowrap;
+            width: 100%;
+        }
+        
+        .nav-tabs button:hover {
+            background-color: var(--light-gray);
+        }
+        
+        .nav-tabs button.active {
+            background-color: var(--primary-color);
+            color: var(--accent-color);
+            font-weight: 500;
+        }
+        
+        .nav-tabs button.active::after {
+            content: '';
+            position: absolute;
+            bottom: -1px;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background-color: var(--accent-color);
+        }
+        
+        .nav-tabs li {
+            position: relative;
+        }
+        
+        /* Content Area */
+        .content {
+            flex: 1;
+            padding: 2rem;
+            max-width: 1200px;
+            margin: 0 auto;
+            width: 100%;
+        }
+        
+        .tab-content {
+            display: none;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        /* Cards and Sections */
+        .section {
+            background: white;
+            border-radius: 10px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            box-shadow: var(--shadow);
+        }
+        
+        .section h2 {
+            color: var(--primary-color);
+            margin-bottom: 1.5rem;
+            border-bottom: 2px solid var(--accent-color);
+            padding-bottom: 0.5rem;
+            font-size: 1.4rem;
+            font-weight: 400;
+        }
+        
+        /* Grid Layouts */
+        .grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-            gap: 20px;
-            width: 100%;
-            margin-bottom: 30px;
+            gap: 1.5rem;
         }
-    
-            .host-card, .form-container {
-            background-color: #f2f2f2;
-            border-radius: 8px;
-            padding: 20px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            width: 100%;
-            box-sizing: border-box;
+        
+        .grid-2 {
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
         }
-    
-    .host-card h3 {
-        margin-top: 0;
-        color: #343f48;
-        border-bottom: 2px solid #ffd700;
-        padding-bottom: 10px;
-        margin-bottom: 15px;
-    }
-    
-    .host-info {
-        margin-bottom: 20px;
-    }
-    
-    .host-info strong {
-        color: #343f48;
-    }
-    
+        
+        .grid-3 {
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        }
+        
+        .grid-4 {
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        }
+        
+        /* Host Cards */
+        .host-card {
+            background: white;
+            border-radius: 10px;
+            padding: 1.5rem;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--border-color);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        
+        .host-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.15);
+        }
+        
+        .host-card h3 {
+            color: var(--primary-color);
+            margin-bottom: 1rem;
+            font-size: 1.2rem;
+            border-bottom: 2px solid var(--accent-color);
+            padding-bottom: 0.5rem;
+        }
+        
+        .host-info p {
+            margin: 0.5rem 0;
+            color: #666;
+        }
+        
+        .host-info strong {
+            color: var(--text-color);
+        }
+        
         .host-actions {
             display: flex;
-            justify-content: space-between;
-            gap: 10px;
-            margin-top: 15px;
+            gap: 0.5rem;
+            margin-top: 1rem;
         }
         
         .host-actions form {
             flex: 1;
         }
         
-        .host-actions input[type="submit"] {
-            width: 100%;
-            padding: 10px 15px;
-            border: none;
+        /* Form Styling */
+        .form-card {
+            background: white;
             border-radius: 10px;
-            font-size: 16px;
-            font-weight: bold;
+            padding: 1.5rem;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--border-color);
+        }
+        
+        .form-card h3 {
+            color: var(--primary-color);
+            margin-bottom: 1.5rem;
+            font-size: 1.2rem;
+        }
+        
+        .form-group {
+            margin-bottom: 1rem;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 0.5rem;
+            color: var(--text-color);
+            font-weight: 500;
+        }
+        
+        input[type="text"],
+        input[type="password"],
+        select {
+            width: 100%;
+            padding: 0.75rem;
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            font-size: 1rem;
+            transition: border-color 0.3s ease;
+        }
+        
+        input[type="text"]:focus,
+        input[type="password"]:focus,
+        select:focus {
+            outline: none;
+            border-color: var(--primary-color);
+        }
+        
+        /* Button Styling */
+        .btn {
+            display: inline-block;
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.95rem;
+            font-weight: 500;
+            text-decoration: none;
+            text-align: center;
             cursor: pointer;
-            transition: background-color 0.3s ease;
+            transition: all 0.3s ease;
+            min-width: 120px;
         }
         
-        .host-actions input[type="submit"]:hover {
-            opacity: 0.9;
+        .btn-primary {
+            background-color: var(--primary-color);
+            color: var(--accent-color);
         }
         
-        .edit-button {
-            background-color: #343f48;
-            color: #ffd700;
+        .btn-primary:hover {
+            background-color: #2c3e50;
+            transform: translateY(-1px);
         }
         
-        .remove-button {
-            background-color: #e74c3c;
+        .btn-success {
+            background-color: var(--success-color);
             color: white;
         }
         
-        .host-actions input[type="submit"].remove-button:hover {
-            background-color: #ff0000;
-            color: yellow;
+        .btn-success:hover {
+            background-color: #218838;
         }
-    
-    .host-actions input[type="submit"]:hover {
-            background-color: #45a049;
-    
-    @media screen and (max-width: 600px) {
-        .dhcp-hosts {
-            grid-template-columns: 1fr;
+        
+        .btn-danger {
+            background-color: var(--danger-color);
+            color: white;
         }
-    }
-    
-    /* Mobile dns management */
-            .management-buttons {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-                gap: 15px;
-                max-width: 800px;
-                margin: 20px auto;
+        
+        .btn-danger:hover {
+            background-color: #c82333;
+        }
+        
+        .btn-info {
+            background-color: var(--info-color);
+            color: white;
+        }
+        
+        .btn-info:hover {
+            background-color: #138496;
+        }
+        
+        .btn-warning {
+            background-color: var(--warning-color);
+            color: var(--text-color);
+        }
+        
+        .btn-full {
+            width: 100%;
+        }
+        
+        .btn-group {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+            margin: 1rem 0;
+        }
+        
+        /* Status Indicators */
+        .status {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 500;
+        }
+        
+        .status-active {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        
+        .status-inactive {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        
+        .status-enabled {
+            background-color: #d1ecf1;
+            color: #0c5460;
+        }
+        
+        /* Connection History Table */
+        .table-responsive {
+            overflow-x: auto;
+            background: white;
+            border-radius: 10px;
+            box-shadow: var(--shadow);
+            margin: 1rem 0;
+        }
+        
+        .connection-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        .connection-table th {
+            background-color: var(--primary-color);
+            color: var(--accent-color);
+            padding: 1rem;
+            text-align: left;
+            font-weight: 500;
+        }
+        
+        .connection-table td {
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .connection-table tr:hover {
+            background-color: var(--light-gray);
+        }
+        
+        .interface-badge {
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            font-weight: 500;
+            color: white;
+        }
+        
+        .interface-wlan0 {
+            background-color: var(--info-color);
+        }
+        
+        .interface-eth0 {
+            background-color: #6c757d;
+        }
+        
+        /* Stats Cards */
+        .stat-card {
+            background: white;
+            border-radius: 10px;
+            padding: 1.5rem;
+            text-align: center;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--border-color);
+        }
+        
+        .stat-card h4 {
+            color: var(--primary-color);
+            margin-bottom: 0.5rem;
+            font-size: 1rem;
+        }
+        
+        .stat-card .stat-number {
+            font-size: 2rem;
+            font-weight: bold;
+            margin: 0.5rem 0;
+        }
+        
+        .stat-success {
+            color: var(--success-color);
+        }
+        
+        .stat-danger {
+            color: var(--danger-color);
+        }
+        
+        .stat-info {
+            color: var(--info-color);
+        }
+        
+        .stat-warning {
+            color: var(--warning-color);
+        }
+        
+        /* Footer */
+        .footer {
+            background-color: var(--primary-color);
+            color: white;
+            text-align: center;
+            padding: 1rem;
+            margin-top: auto;
+        }
+        
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            .content {
+                padding: 1rem;
             }
             
-            .management-buttons button {
+            .nav-tabs button {
+                padding: 0.75rem 1rem;
+                font-size: 0.9rem;
+            }
+            
+            .btn-group {
+                flex-direction: column;
+            }
+            
+            .btn-group .btn {
                 width: 100%;
-                padding: 10px 15px;
-                background-color: #343f48;
-                color: #ffd700;
-                border: none;
-                border-radius: 10px;
-                font-size: 16px;
-                font-weight: bold;
-                cursor: pointer;
-                transition: background-color 0.3s ease;
+                margin-bottom: 0.5rem;
             }
             
-            .management-buttons button:hover {
-                background-color: #45a049;
-                color: yellow;
+            .host-actions {
+                flex-direction: column;
             }
             
-            @media (max-width: 600px) {
-                .management-buttons {
-                    grid-template-columns: 1fr;
-                }
+            .grid-2,
+            .grid-3,
+            .grid-4 {
+                grid-template-columns: 1fr;
             }
-    
+            
+            .connection-table th,
+            .connection-table td {
+                padding: 0.5rem;
+                font-size: 0.9rem;
+            }
+            
+            .stat-card .stat-number {
+                font-size: 1.5rem;
+            }
+        }
+        
+        @media (max-width: 480px) {
+            .header {
+                padding: 0.75rem;
+            }
+            
+            .header h1 {
+                font-size: 1.5rem;
+            }
+            
+            .content {
+                padding: 0.75rem;
+            }
+            
+            .section {
+                padding: 1rem;
+            }
+            
+            .nav-tabs button {
+                padding: 0.6rem 0.8rem;
+                font-size: 0.85rem;
+            }
+        }
+        
+        /* Loading States */
+        .loading {
+            text-align: center;
+            padding: 2rem;
+            color: #666;
+        }
+        
+        /* Note styling */
+        .note {
+            background-color: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 8px;
+            padding: 1rem;
+            margin: 1rem 0;
+            font-size: 0.9rem;
+            color: #856404;
+        }
     </style>
 </head>
 <body>
-    <div class="page-container">
-        <div class="content-wrap">
-            <h1>DHCP/DNS Dashboard</h1>
-            {% with messages = get_flashed_messages() %}
-                {% if messages %}
+    <div class="container">
+        <header class="header">
+            <h1>🌐 DHCP/DNS Dashboard</h1>
+        </header>
+        
+        {% with messages = get_flashed_messages() %}
+            {% if messages %}
+                <div class="flash-messages">
                     {% for message in messages %}
-                        <div class="flash">{{ message }}</div>
+                        <div class="flash{% if 'error' in message.lower() or 'failed' in message.lower() %} danger{% endif %}">{{ message }}</div>
                     {% endfor %}
-                {% endif %}
-            {% endwith %}
-            
-            <h2>Current DHCP Hosts</h2>
-            <div class="dhcp-hosts">
-                {% for mac, hostname, ip in hosts %}
-                <div class="host-card">
-                    <h3>{{ hostname }}</h3>
-                    <div class="host-info">
-                        <p><strong>MAC Address:</strong> {{ mac }}</p>
-                        <p><strong>IP Address:</strong> {{ ip if ip else 'Dynamic' }}</p>
+                </div>
+            {% endif %}
+        {% endwith %}
+        
+        <nav class="nav-tabs">
+            <ul>
+                <li><button class="tab-btn active" data-tab="overview">📊 Overview</button></li>
+                <li><button class="tab-btn" data-tab="hosts">🖥️ Host Management</button></li>
+                <li><button class="tab-btn" data-tab="network">📡 Network Config</button></li>
+                <li><button class="tab-btn" data-tab="monitoring">📈 Monitoring</button></li>
+                <li><button class="tab-btn" data-tab="system">⚙️ System</button></li>
+            </ul>
+        </nav>
+        
+        <main class="content">
+            <!-- Overview Tab -->
+            <div id="overview" class="tab-content active">
+                <div class="section">
+                    <h2>System Status Overview</h2>
+                    <div class="grid grid-4">
+                        <div class="stat-card">
+                            <h4>DHCP Hosts</h4>
+                            <div class="stat-number stat-info">{{ hosts|length }}</div>
+                        </div>
+                        <div class="stat-card">
+                            <h4>Access Point</h4>
+                            <div class="stat-number {% if ap_config.enabled %}stat-success{% else %}stat-danger{% endif %}">
+                                {% if ap_config.enabled %}Active{% else %}Inactive{% endif %}
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <h4>Internet Sharing</h4>
+                            <div class="stat-number {% if internet_sharing.enabled %}stat-success{% else %}stat-warning{% endif %}">
+                                {% if internet_sharing.enabled %}Enabled{% else %}Disabled{% endif %}
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <h4>Network Status</h4>
+                            <div class="stat-number stat-success">Online</div>
+                        </div>
                     </div>
-                    <div class="host-actions">
-                    <form method="get" action="{{ url_for('edit_host') }}">
-                        <input type="hidden" name="mac" value="{{ mac }}" />
-                        <input type="submit" value="Edit" class="edit-button" />
-                    </form>
-                    <form onsubmit="return confirmRemove('{{ hostname }}')" method="post" action="{{ url_for('remove_host') }}">
-                        <input type="hidden" name="mac" value="{{ mac }}" />
-                        <input type="submit" value="Remove" class="remove-button" />
-                    </form>
                 </div>
+                
+                <div class="section">
+                    <h2>Quick Actions</h2>
+                    <div class="btn-group">
+                        <button class="btn btn-primary" onclick="showTab('hosts')">Manage Hosts</button>
+                        <button class="btn btn-info" onclick="showTab('network')">Network Setup</button>
+                        <button class="btn btn-success" onclick="showTab('monitoring')">View Monitoring</button>
+                    </div>
                 </div>
-                {% endfor %}
             </div>
-            <br>
-            <div class="form-container-wrapper">
-                <div class="form-container">
+            
+            <!-- Host Management Tab -->
+            <div id="hosts" class="tab-content">
+                <div class="section">
+                    <h2>Current DHCP Hosts</h2>
+                    {% if hosts %}
+                        <div class="grid grid-3">
+                            {% for mac, hostname, ip in hosts %}
+                            <div class="host-card">
+                                <h3>{{ hostname }}</h3>
+                                <div class="host-info">
+                                    <p><strong>MAC:</strong> <code>{{ mac }}</code></p>
+                                    <p><strong>IP:</strong> <code>{{ ip if ip else 'Dynamic' }}</code></p>
+                                </div>
+                                <div class="host-actions">
+                                    <form method="get" action="{{ url_for('edit_host') }}">
+                                        <input type="hidden" name="mac" value="{{ mac }}">
+                                        <button type="submit" class="btn btn-primary btn-full">Edit</button>
+                                    </form>
+                                    <form onsubmit="return confirmRemove('{{ hostname }}')" method="post" action="{{ url_for('remove_host') }}">
+                                        <input type="hidden" name="mac" value="{{ mac }}">
+                                        <button type="submit" class="btn btn-danger btn-full">Remove</button>
+                                    </form>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    {% else %}
+                        <p>No DHCP hosts configured yet.</p>
+                    {% endif %}
+                </div>
+                
+                <div class="section">
                     <h2>Add New Host</h2>
-                    <form method="post">
-                        <input type="hidden" name="action" value="add" />
-                        <label for="mac">MAC Address:</label>
-                        <input type="text" id="mac" name="mac" required />
-                        <label for="hostname">Hostname:</label>
-                        <input type="text" id="hostname" name="hostname" required />
-                        <label for="ip">IP Address (optional):</label>
-                        <input type="text" id="ip" name="ip" />
-                        <input type="submit" value="Add Host" />
-                    </form>
+                    <div class="form-card">
+                        <form method="post">
+                            <input type="hidden" name="action" value="add">
+                            <div class="form-group">
+                                <label for="mac">MAC Address:</label>
+                                <input type="text" id="mac" name="mac" placeholder="00:11:22:33:44:55" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="hostname">Hostname:</label>
+                                <input type="text" id="hostname" name="hostname" placeholder="device-name" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="ip">IP Address (optional):</label>
+                                <input type="text" id="ip" name="ip" placeholder="192.168.4.100">
+                            </div>
+                            <button type="submit" class="btn btn-success btn-full">Add Host</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Network Configuration Tab -->
+            <div id="network" class="tab-content">
+                <div class="grid grid-2">
+                    <div class="section">
+                        <h2>Wi-Fi Client Configuration</h2>
+                        <p>Configure wlan1 to connect to an external Wi-Fi network for internet access.</p>
+                        <div class="form-card">
+                            <form method="post">
+                                <input type="hidden" name="action" value="wifi">
+                                <div class="form-group">
+                                    <label for="ssid">Wi-Fi SSID:</label>
+                                    <input type="text" id="ssid" name="ssid" required>
+                                </div>
+                                <div class="form-group">
+                                    <label for="password">Wi-Fi Password:</label>
+                                    <input type="password" id="password" name="password" required>
+                                </div>
+                                <button type="submit" class="btn btn-primary btn-full">Update Wi-Fi Settings</button>
+                            </form>
+                        </div>
+                    </div>
+                    
+                    <div class="section">
+                        <h2>Access Point Configuration</h2>
+                        <p>Configure wlan0 as a wireless access point for local devices.</p>
+                        <div class="form-card">
+                            <form method="post">
+                                <input type="hidden" name="action" value="configure_ap">
+                                <div class="form-group">
+                                    <label for="ap_ssid">AP SSID:</label>
+                                    <input type="text" id="ap_ssid" name="ap_ssid" value="{{ ap_config.ssid }}" required>
+                                </div>
+                                <div class="form-group">
+                                    <label for="ap_password">AP Password (min 8 chars):</label>
+                                    <input type="password" id="ap_password" name="ap_password" value="{{ ap_config.password }}" required minlength="8">
+                                </div>
+                                <div class="form-group">
+                                    <label for="ap_channel">Wi-Fi Channel (2.4GHz):</label>
+                                    <select id="ap_channel" name="ap_channel">
+                                        <option value="1" {{ 'selected' if ap_config.channel == '1' else '' }}>Channel 1 (2412 MHz)</option>
+                                        <option value="6" {{ 'selected' if ap_config.channel == '6' else '' }}>Channel 6 (2437 MHz) - Default</option>
+                                        <option value="11" {{ 'selected' if ap_config.channel == '11' else '' }}>Channel 11 (2462 MHz)</option>
+                                    </select>
+                                </div>
+                                <div class="note">
+                                    💡 <strong>Tip:</strong> Channels 1, 6, and 11 are recommended for minimal interference.
+                                </div>
+                                <button type="submit" class="btn btn-primary btn-full">Configure Access Point</button>
+                            </form>
+                        </div>
+                    </div>
                 </div>
                 
-                <div class="form-container">
-                    <h2>Wi-Fi Configuration</h2>
-                    <form method="post">
-                        <input type="hidden" name="action" value="wifi">
-                        <label for="ssid">Wi-Fi SSID:</label>
-                        <input type="text" id="ssid" name="ssid" required>
-                        <label for="password">Wi-Fi Password:</label>
-                        <input type="password" id="password" name="password" required>
-                        <input type="submit" value="Update Wi-Fi Settings">
-                    </form>
+                <div class="section">
+                    <h2>Network Management</h2>
+                    <div class="grid grid-2">
+                        <div>
+                            <h3>Access Point Control</h3>
+                            <p><strong>Status:</strong> <span class="status {% if ap_config.enabled %}status-active{% else %}status-inactive{% endif %}">{{ 'Active' if ap_config.enabled else 'Inactive' }}</span></p>
+                            <div class="btn-group">
+                                <form method="post" style="display: inline;">
+                                    <input type="hidden" name="action" value="start_ap">
+                                    <button type="submit" class="btn btn-success">Start AP</button>
+                                </form>
+                                <form method="post" style="display: inline;">
+                                    <input type="hidden" name="action" value="stop_ap">
+                                    <button type="submit" class="btn btn-danger">Stop AP</button>
+                                </form>
+                                <form method="post" style="display: inline;">
+                                    <input type="hidden" name="action" value="ap_status">
+                                    <button type="submit" class="btn btn-info">Check Status</button>
+                                </form>
+                            </div>
+                        </div>
+                        
+                        <div>
+                            <h3>Internet Sharing</h3>
+                            <p><strong>Status:</strong> <span class="status {% if internet_sharing.enabled %}status-enabled{% else %}status-inactive{% endif %}">{{ 'Enabled' if internet_sharing.enabled else 'Disabled' }}</span></p>
+                            <p class="note">
+                                {% if internet_sharing.enabled %}
+                                🌐 Local devices can access internet through wlan1
+                                {% else %}
+                                🔒 Local network is isolated from internet
+                                {% endif %}
+                            </p>
+                            <div class="btn-group">
+                                <form method="post" style="display: inline;">
+                                    <input type="hidden" name="action" value="enable_internet">
+                                    <button type="submit" class="btn btn-info">Enable Sharing</button>
+                                </form>
+                                <form method="post" style="display: inline;">
+                                    <input type="hidden" name="action" value="disable_internet">
+                                    <button type="submit" class="btn btn-warning">Disable Sharing</button>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Monitoring Tab -->
+            <div id="monitoring" class="tab-content">
+                <div class="section">
+                    <h2>Connection Statistics</h2>
+                    <div class="btn-group">
+                        <button class="btn btn-primary" onclick="loadConnections()">Refresh Data</button>
+                        <button class="btn btn-info" onclick="loadStats()">View Statistics</button>
+                    </div>
+                    <div id="connectionStats" style="display: none;"></div>
                 </div>
                 
-                <div class="form-container">
-                    <h2>Access Point Configuration</h2>
-                    <form method="post">
-                        <input type="hidden" name="action" value="configure_ap">
-                        <label for="ap_ssid">AP SSID:</label>
-                        <input type="text" id="ap_ssid" name="ap_ssid" value="{{ ap_config.ssid }}" required>
-                        <label for="ap_password">AP Password (min 8 chars):</label>
-                        <input type="password" id="ap_password" name="ap_password" value="{{ ap_config.password }}" required minlength="8">
-                        <label for="ap_channel">Wi-Fi Channel (2.4GHz):</label>
-                        <select id="ap_channel" name="ap_channel" style="width: 100%; padding: 0.5rem; margin-bottom: 1rem; border: 1px solid #ddd; border-radius: 4px;">
-                            <option value="1" {{ 'selected' if ap_config.channel == '1' else '' }}>Channel 1 (2412 MHz)</option>
-                            <option value="2" {{ 'selected' if ap_config.channel == '2' else '' }}>Channel 2 (2417 MHz)</option>
-                            <option value="3" {{ 'selected' if ap_config.channel == '3' else '' }}>Channel 3 (2422 MHz)</option>
-                            <option value="4" {{ 'selected' if ap_config.channel == '4' else '' }}>Channel 4 (2427 MHz)</option>
-                            <option value="5" {{ 'selected' if ap_config.channel == '5' else '' }}>Channel 5 (2432 MHz)</option>
-                            <option value="6" {{ 'selected' if ap_config.channel == '6' else '' }}>Channel 6 (2437 MHz) - Default</option>
-                            <option value="7" {{ 'selected' if ap_config.channel == '7' else '' }}>Channel 7 (2442 MHz)</option>
-                            <option value="8" {{ 'selected' if ap_config.channel == '8' else '' }}>Channel 8 (2447 MHz)</option>
-                            <option value="9" {{ 'selected' if ap_config.channel == '9' else '' }}>Channel 9 (2452 MHz)</option>
-                            <option value="10" {{ 'selected' if ap_config.channel == '10' else '' }}>Channel 10 (2457 MHz)</option>
-                            <option value="11" {{ 'selected' if ap_config.channel == '11' else '' }}>Channel 11 (2462 MHz)</option>
-                        </select>
-                        <p style="font-size: 0.85em; color: #666; margin-top: -0.5rem;">💡 Recommended: 1, 6, or 11 (non-overlapping)</p>
-                        <input type="submit" value="Configure Access Point">
-                    </form>
+                <div class="section">
+                    <h2>Recent Connections</h2>
+                    <div id="connectionHistory" class="loading">Loading connection history...</div>
                 </div>
             </div>
             
-            <h2>Access Point Management</h2>
-            <p><strong>Status:</strong> <span style="color: {{ 'green' if ap_config.enabled else 'red' }};">{{ 'Active' if ap_config.enabled else 'Inactive' }}</span></p>
-            <form method="post" style="display: inline;">
-                <input type="hidden" name="action" value="start_ap" />
-                <input type="submit" value="Start Access Point" style="background-color: #28a745;" />
-            </form>
-            <form method="post" style="display: inline; margin-left: 10px;">
-                <input type="hidden" name="action" value="stop_ap" />
-                <input type="submit" value="Stop Access Point" style="background-color: #dc3545;" />
-            </form>
-            <form method="post" style="display: inline; margin-left: 10px;">
-                <input type="hidden" name="action" value="ap_status" />
-                <input type="submit" value="Check AP Status" />
-            </form>
-            
-            <h2>Connection History</h2>
-            <div style="margin-bottom: 20px;">
-                <p>Track all device connections (wired and wireless) with timestamps, MAC addresses, IP addresses, and hostnames.</p>
-                <button onclick="loadConnections()" style="padding: 10px 20px; background-color: #343f48; color: #ffd700; border: none; border-radius: 5px; cursor: pointer; margin-right: 10px;">Refresh Connections</button>
-                <button onclick="loadStats()" style="padding: 10px 20px; background-color: #17a2b8; color: white; border: none; border-radius: 5px; cursor: pointer;">View Statistics</button>
+            <!-- System Tab -->
+            <div id="system" class="tab-content">
+                <div class="grid grid-2">
+                    <div class="section">
+                        <h2>DNSMASQ Management</h2>
+                        <p>Manage the DHCP/DNS service that handles IP assignments and name resolution.</p>
+                        <div class="btn-group">
+                            <form method="post" style="display: inline;">
+                                <input type="hidden" name="action" value="restart">
+                                <button type="submit" class="btn btn-primary">Restart Service</button>
+                            </form>
+                            <form method="post" style="display: inline;">
+                                <input type="hidden" name="action" value="backup">
+                                <button type="submit" class="btn btn-info">Backup Config</button>
+                            </form>
+                            <form method="post" style="display: inline;">
+                                <input type="hidden" name="action" value="status">
+                                <button type="submit" class="btn btn-success">Check Status</button>
+                            </form>
+                        </div>
+                    </div>
+                    
+                    <div class="section">
+                        <h2>System Management</h2>
+                        <p>System-level operations. Use with caution.</p>
+                        <div class="note">
+                            ⚠️ <strong>Warning:</strong> Shutdown will make the device inaccessible until manually restarted.
+                        </div>
+                        <form method="post" style="display: inline;">
+                            <input type="hidden" name="action" value="shutdown">
+                            <button type="submit" class="btn btn-danger btn-full" onclick="return confirm('Are you sure you want to shutdown the Raspberry Pi? This will make it inaccessible until manually restarted.')">Shutdown Raspberry Pi</button>
+                        </form>
+                    </div>
+                </div>
             </div>
-            <div id="connectionHistory" style="background-color: #f9f9f9; padding: 15px; border-radius: 5px; max-height: 400px; overflow-y: auto;">
-                <p>Loading connection history...</p>
-            </div>
-            <div id="connectionStats" style="display: none; background-color: #e9ecef; padding: 15px; border-radius: 5px; margin-top: 10px;">
-            </div>
-            
-            <h2>DNSMASQ Management</h2>
-            <form method="post" style="display: inline;">
-                <input type="hidden" name="action" value="restart" />
-                <input type="submit" value="Restart DNSMASQ" />
-            </form>
-            <form method="post" style="display: inline; margin-left: 10px;">
-                <input type="hidden" name="action" value="backup" />
-                <input type="submit" value="Backup Configuration" />
-            </form>
-            <form method="post" style="display: inline; margin-left: 10px;">
-                <input type="hidden" name="action" value="status" />
-                <input type="submit" value="Check DNSMASQ Status" />
-            </form>
-                                              
-            <h2>System Management</h2>
-            <form method="post" style="display: inline;">
-                <input type="hidden" name="action" value="shutdown" />
-                <input type="submit" value="Shutdown Raspberry Pi" class="danger" />
-            </form>
-        </div>
+        </main>
         
         <footer class="footer">
             <p>&copy; <span id="current-year"></span> JPHsystems. All rights reserved.</p>
         </footer>
 
         <script>
+            // Set current year
             document.getElementById('current-year').textContent = new Date().getFullYear();
-                                  
+            
+            // Tab switching functionality
+            function showTab(tabName) {
+                // Hide all tab contents
+                const tabContents = document.querySelectorAll('.tab-content');
+                tabContents.forEach(content => content.classList.remove('active'));
+                
+                // Remove active class from all tab buttons
+                const tabBtns = document.querySelectorAll('.tab-btn');
+                tabBtns.forEach(btn => btn.classList.remove('active'));
+                
+                // Show selected tab content
+                document.getElementById(tabName).classList.add('active');
+                
+                // Add active class to clicked tab button
+                const activeBtn = document.querySelector(`[data-tab="${tabName}"]`);
+                if (activeBtn) activeBtn.classList.add('active');
+                
+                // Load data for monitoring tab
+                if (tabName === 'monitoring') {
+                    loadConnections();
+                }
+            }
+            
+            // Add click event listeners to tab buttons
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    showTab(btn.dataset.tab);
+                });
+            });
+            
             function confirmRemove(hostname) {
                 return confirm(`Are you sure you want to remove the host "${hostname}"?`);
             }
 
             function loadConnections() {
+                const container = document.getElementById('connectionHistory');
+                container.innerHTML = '<div class="loading">Loading connections...</div>';
+                
                 fetch('/api/connections?limit=50')
                     .then(response => response.json())
                     .then(data => {
-                        const container = document.getElementById('connectionHistory');
                         if (data.connections && data.connections.length > 0) {
-                            let html = '<h3>Recent Connections (Last 50)</h3>';
-                            html += '<table style="width: 100%; border-collapse: collapse;">';
-                            html += '<tr style="background-color: #343f48; color: #ffd700;">';
-                            html += '<th style="padding: 10px; text-align: left;">Time</th>';
-                            html += '<th style="padding: 10px; text-align: left;">Event</th>';
-                            html += '<th style="padding: 10px; text-align: left;">MAC Address</th>';
-                            html += '<th style="padding: 10px; text-align: left;">IP Address</th>';
-                            html += '<th style="padding: 10px; text-align: left;">Hostname</th>';
-                            html += '<th style="padding: 10px; text-align: left;">Interface</th>';
-                            html += '</tr>';
+                            let html = '<div class="table-responsive">';
+                            html += '<table class="connection-table">';
+                            html += '<thead><tr>';
+                            html += '<th>Time</th><th>Event</th><th>MAC Address</th>';
+                            html += '<th>IP Address</th><th>Hostname</th><th>Interface</th>';
+                            html += '</tr></thead><tbody>';
                             
-                            data.connections.forEach((conn, index) => {
-                                const bgColor = index % 2 === 0 ? '#ffffff' : '#f2f2f2';
-                                const eventColor = conn.event === 'connect' ? '#28a745' : '#dc3545';
+                            data.connections.forEach(conn => {
                                 const time = new Date(conn.timestamp).toLocaleString();
+                                const eventColor = conn.event === 'connect' ? 'stat-success' : 'stat-danger';
+                                const interfaceClass = conn.interface === 'wlan0' ? 'interface-wlan0' : 'interface-eth0';
                                 
-                                html += `<tr style="background-color: ${bgColor};">`;
-                                html += `<td style="padding: 8px;">${time}</td>`;
-                                html += `<td style="padding: 8px; color: ${eventColor}; font-weight: bold;">${conn.event.toUpperCase()}</td>`;
-                                html += `<td style="padding: 8px; font-family: monospace;">${conn.mac}</td>`;
-                                html += `<td style="padding: 8px; font-family: monospace;">${conn.ip}</td>`;
-                                html += `<td style="padding: 8px;">${conn.hostname}</td>`;
-                                html += `<td style="padding: 8px;"><span style="background-color: ${conn.interface === 'wlan0' ? '#17a2b8' : '#6c757d'}; color: white; padding: 2px 8px; border-radius: 3px;">${conn.interface}</span></td>`;
+                                html += '<tr>';
+                                html += `<td>${time}</td>`;
+                                html += `<td><span class="${eventColor}">${conn.event.toUpperCase()}</span></td>`;
+                                html += `<td><code>${conn.mac}</code></td>`;
+                                html += `<td><code>${conn.ip}</code></td>`;
+                                html += `<td>${conn.hostname}</td>`;
+                                html += `<td><span class="interface-badge ${interfaceClass}">${conn.interface}</span></td>`;
                                 html += '</tr>';
                             });
                             
-                            html += '</table>';
-                            html += `<p style="margin-top: 10px; color: #666;">Total connections in history: ${data.total}</p>`;
+                            html += '</tbody></table></div>';
+                            html += `<p style="margin-top: 1rem; color: #666; text-align: center;">Showing recent 50 connections (Total: ${data.total})</p>`;
                             container.innerHTML = html;
                         } else {
-                            container.innerHTML = '<p>No connection history available yet.</p>';
+                            container.innerHTML = '<p style="text-align: center; color: #666;">No connection history available yet.</p>';
                         }
                     })
                     .catch(error => {
-                        document.getElementById('connectionHistory').innerHTML = '<p style="color: red;">Error loading connections: ' + error + '</p>';
+                        container.innerHTML = `<p style="color: var(--danger-color); text-align: center;">Error loading connections: ${error}</p>`;
                     });
             }
 
             function loadStats() {
+                const container = document.getElementById('connectionStats');
+                
                 fetch('/api/connections/stats')
                     .then(response => response.json())
                     .then(data => {
-                        const container = document.getElementById('connectionStats');
-                        let html = '<h3>Connection Statistics</h3>';
-                        html += '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">';
+                        let html = '<div class="grid grid-4" style="margin-top: 1rem;">';
                         
-                        html += `<div style="background-color: white; padding: 15px; border-radius: 5px; text-align: center;">
-                            <h4 style="margin: 0; color: #343f48;">Total Connections</h4>
-                            <p style="font-size: 24px; font-weight: bold; margin: 10px 0; color: #28a745;">${data.total_connections}</p>
+                        html += `<div class="stat-card">
+                            <h4>Total Connections</h4>
+                            <div class="stat-number stat-success">${data.total_connections}</div>
                         </div>`;
                         
-                        html += `<div style="background-color: white; padding: 15px; border-radius: 5px; text-align: center;">
-                            <h4 style="margin: 0; color: #343f48;">Total Disconnections</h4>
-                            <p style="font-size: 24px; font-weight: bold; margin: 10px 0; color: #dc3545;">${data.total_disconnections}</p>
+                        html += `<div class="stat-card">
+                            <h4>Disconnections</h4>
+                            <div class="stat-number stat-danger">${data.total_disconnections}</div>
                         </div>`;
                         
-                        html += `<div style="background-color: white; padding: 15px; border-radius: 5px; text-align: center;">
-                            <h4 style="margin: 0; color: #343f48;">Wireless Connections</h4>
-                            <p style="font-size: 24px; font-weight: bold; margin: 10px 0; color: #17a2b8;">${data.wireless_connections}</p>
+                        html += `<div class="stat-card">
+                            <h4>Wireless Connections</h4>
+                            <div class="stat-number stat-info">${data.wireless_connections}</div>
                         </div>`;
                         
-                        html += `<div style="background-color: white; padding: 15px; border-radius: 5px; text-align: center;">
-                            <h4 style="margin: 0; color: #343f48;">Wired Connections</h4>
-                            <p style="font-size: 24px; font-weight: bold; margin: 10px 0; color: #6c757d;">${data.wired_connections}</p>
+                        html += `<div class="stat-card">
+                            <h4>Unique Devices</h4>
+                            <div class="stat-number stat-warning">${data.unique_devices}</div>
                         </div>`;
                         
-                        html += `<div style="background-color: white; padding: 15px; border-radius: 5px; text-align: center;">
-                            <h4 style="margin: 0; color: #343f48;">Unique Devices</h4>
-                            <p style="font-size: 24px; font-weight: bold; margin: 10px 0; color: #ffc107;">${data.unique_devices}</p>
+                        html += `<div class="stat-card">
+                            <h4>Wired Connections</h4>
+                            <div class="stat-number">${data.wired_connections}</div>
                         </div>`;
                         
-                        html += `<div style="background-color: white; padding: 15px; border-radius: 5px; text-align: center;">
-                            <h4 style="margin: 0; color: #343f48;">Currently Active</h4>
-                            <p style="font-size: 24px; font-weight: bold; margin: 10px 0; color: #28a745;">${data.currently_active}</p>
+                        html += `<div class="stat-card">
+                            <h4>Currently Active</h4>
+                            <div class="stat-number stat-success">${data.currently_active}</div>
                         </div>`;
                         
                         html += '</div>';
@@ -1548,21 +2142,23 @@ def dashboard():
                         container.style.display = 'block';
                     })
                     .catch(error => {
-                        document.getElementById('connectionStats').innerHTML = '<p style="color: red;">Error loading statistics: ' + error + '</p>';
-                        document.getElementById('connectionStats').style.display = 'block';
+                        container.innerHTML = `<p style="color: var(--danger-color);">Error loading statistics: ${error}</p>`;
+                        container.style.display = 'block';
                     });
             }
 
-            // Load connections on page load
+            // Load connections on page load if on monitoring tab
             window.addEventListener('load', function() {
-                loadConnections();
+                const activeTab = document.querySelector('.tab-content.active');
+                if (activeTab && activeTab.id === 'monitoring') {
+                    loadConnections();
+                }
             });
-
         </script>
     </div>
 </body>
 </html>
-    ''', hosts=hosts, ap_config=ap_config)
+    ''', hosts=hosts, ap_config=ap_config, internet_sharing=internet_sharing)
 
 
 @app.route('/edit', methods=['GET', 'POST'])

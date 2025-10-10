@@ -47,6 +47,7 @@ Transform your Raspberry Pi into a powerful **network management hub** with:
   - Configure channel and country settings
   - Perfect for isolated lab/testing networks
   - **Connection logging** - Track all device connections/disconnections with timestamps
+  - **Internet sharing toggle** - Enable/disable internet access from wlan1 to local network
 
 - **DNSMASQ Service Control**
   - Restart the dnsmasq service
@@ -126,6 +127,21 @@ Features:
 - **Get AP status**
   ```bash
   curl http://your-ip:8080/api/ap/status
+  ```
+
+- **Get internet sharing status**
+  ```bash
+  curl http://your-ip:8080/api/ap/internet-sharing/status
+  ```
+
+- **Enable internet sharing**
+  ```bash
+  curl -X POST http://your-ip:8080/api/ap/internet-sharing/enable
+  ```
+
+- **Disable internet sharing**
+  ```bash
+  curl -X POST http://your-ip:8080/api/ap/internet-sharing/disable
   ```
 
 #### 📊 Connection Tracking
@@ -311,11 +327,20 @@ When you configure through the web interface:
    - Gets IP via DHCP from that network
    - **Requires USB Wi-Fi adapter**
 
-3. **Network Configuration** automatically handles:
+3. **Internet Sharing** - Toggle on/off via web interface
+   - **Enable**: Share internet from wlan1 to local network
+     - Devices on wlan0/eth0 can access internet
+     - Uses NAT/IP forwarding
+   - **Disable**: Isolate local network (no internet)
+     - Lab network is completely isolated
+     - No external access
+
+4. **Network Configuration** automatically handles:
    - Static IP `192.168.4.1/24` for wlan0 and eth0
    - DHCP client on wlan1
    - DNS server for local network
    - Unified subnet for AP clients
+   - IP forwarding and NAT (when internet sharing enabled)
 
 ### 🔗 Network Topology (Dual Wi-Fi Adapter Setup)
 
