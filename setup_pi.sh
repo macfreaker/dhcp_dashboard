@@ -167,6 +167,31 @@ print_success "Services stopped"
 echo ""
 
 ################################################################################
+# Clean DHCP Configuration (Start Fresh)
+################################################################################
+
+print_status "Cleaning existing DHCP host entries from dnsmasq.conf..."
+
+# Backup current dnsmasq.conf before cleaning
+if [ -f "/etc/dnsmasq.conf" ]; then
+    BACKUP_FILE="/etc/dnsmasq.conf.backup_$(date +%Y%m%d_%H%M%S)"
+    cp /etc/dnsmasq.conf "$BACKUP_FILE"
+    print_success "Backed up existing config to: $BACKUP_FILE"
+    
+    # Remove all dhcp-host= lines to start fresh
+    sed -i '/^dhcp-host=/d' /etc/dnsmasq.conf
+    print_success "Removed all existing DHCP host entries"
+    
+    # Count remaining lines
+    REMAINING=$(grep -c "^" /etc/dnsmasq.conf || echo "0")
+    print_status "Starting with clean DHCP host list (0 entries)"
+else
+    print_warning "No existing dnsmasq.conf found - will be created when you configure AP"
+fi
+
+echo ""
+
+################################################################################
 # Create Systemd Service
 ################################################################################
 
