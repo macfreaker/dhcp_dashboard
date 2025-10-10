@@ -1,6 +1,6 @@
 # Dashboard for DHCP/DNS on Raspberry PI
 
-A Flask web application that provides a comprehensive dashboard for managing DHCP/DNS settings on a Raspberry Pi running dnsmasq. This tool makes it easy to manage network devices through both a web interface and RESTful API.
+A Flask web application that provides a comprehensive dashboard for managing DHCP/DNS settings on a Raspberry Pi running dnsmasq. **Now includes Access Point functionality** - transform your Raspberry Pi into a wireless access point with unified local network across Wi-Fi and Ethernet!
 
 ## Features
 
@@ -11,12 +11,24 @@ A Flask web application that provides a comprehensive dashboard for managing DHC
   - Remove hosts from the DHCP server
   - View all configured hosts in a responsive card-based layout
 
+- **Access Point (AP) Mode** ⭐ NEW
+  - Configure Raspberry Pi as a wireless access point
+  - Broadcast your own Wi-Fi network (SSID & password configuration)
+  - Create unified local network across Wi-Fi (wlan0) and Ethernet (eth0/switch)
+  - All devices (wireless + wired) on same subnet (192.168.4.x)
+  - Start/stop access point services
+  - Monitor connected clients
+  - Configure channel and country settings
+  - Perfect for isolated lab/testing networks
+  - **Connection logging** - Track all device connections/disconnections with timestamps
+
 - **DNSMASQ Service Control**
   - Restart the dnsmasq service
   - Check dnsmasq status
   - Create timestamped backups of the configuration file
 
-- **Wi-Fi Configuration**
+- **Wi-Fi Client Configuration**
+  - Connect to existing Wi-Fi networks as a client
   - Update Wi-Fi SSID and password through the web interface
   - Automatically reconnect to new networks
 
@@ -45,6 +57,55 @@ A Flask web application that provides a comprehensive dashboard for managing DHC
   curl -X DELETE http://your-ip:8080/api/hosts/00:11:22:33:44:55
   ```
 
+#### Access Point Management
+- **Get AP configuration**
+  ```bash
+  curl http://your-ip:8080/api/ap/config
+  ```
+
+- **Configure access point**
+  ```bash
+  curl -X POST -H "Content-Type: application/json" \
+    -d '{"ssid":"MyAP","password":"securepass123","channel":"6","country":"BE"}' \
+    http://your-ip:8080/api/ap/config
+  ```
+
+- **Start access point**
+  ```bash
+  curl -X POST http://your-ip:8080/api/ap/start
+  ```
+
+- **Stop access point**
+  ```bash
+  curl -X POST http://your-ip:8080/api/ap/stop
+  ```
+
+- **Get AP status**
+  ```bash
+  curl http://your-ip:8080/api/ap/status
+  ```
+
+#### Connection Tracking
+- **Get connection history**
+```bash
+curl http://your-ip:8080/api/connections?limit=50
+```
+
+- **Get active connections**
+```bash
+curl http://your-ip:8080/api/connections/active
+```
+
+- **Get connection statistics**
+```bash
+curl http://your-ip:8080/api/connections/stats
+```
+
+- **Manually monitor connections**
+```bash
+curl -X POST http://your-ip:8080/api/connections/monitor
+```
+
 #### Log Management
 - **View last N lines from log**
   ```bash
@@ -66,40 +127,175 @@ You can use tools like Postman, Insomnia, or any HTTP client to interact with th
 
 ## Installation
 
-1. Clone this repository
-2. Install dependencies:
+### Quick Setup (Recommended)
+
+Use the automated setup script for complete installation and auto-start configuration:
+
+```bash
+# Clone this repository
+git clone <repository-url>
+cd dhcp_dashboard
+
+# Run the setup script (requires sudo)
+sudo bash setup_pi.sh
+```
+
+**The setup script will:**
+- ✅ Install all required packages (dnsmasq, hostapd, python3-pip)
+- ✅ Install Python dependencies from requirements.txt
+- ✅ Create systemd service for auto-start on boot
+- ✅ Configure sudo permissions for system commands
+- ✅ Start the application automatically
+- ✅ Display access URL and service management commands
+
+### Manual Setup
+
+If you prefer manual installation:
+
+1. **Install prerequisites:**
    ```bash
-   pip install -r requirements.txt
+   sudo apt-get update
+   sudo apt-get install -y dnsmasq hostapd python3-pip
    ```
 
-3. Ensure dnsmasq is installed:
+2. **Clone and install dependencies:**
    ```bash
-   sudo apt-get install dnsmasq
+   git clone <repository-url>
+   cd dhcp_dashboard
+   pip3 install -r requirements.txt
    ```
 
-4. Run the application:
+3. **Run manually:**
    ```bash
-   python dhcp_dashboard.py
+   sudo python3 dhcp_dashboard.py
    ```
+   *Note: sudo required for system-level network configuration*
 
-5. Access the dashboard at: `http://your-raspberry-pi-ip:8080`
+4. **Access the dashboard:**
+   - Open browser: `http://your-raspberry-pi-ip:8080`
+
+### Service Management
+
+After setup, manage the service with systemd:
+
+```bash
+# Check service status
+sudo systemctl status dhcp-dashboard
+
+# Start the service
+sudo systemctl start dhcp-dashboard
+
+# Stop the service
+sudo systemctl stop dhcp-dashboard
+
+# Restart the service
+sudo systemctl restart dhcp-dashboard
+
+# View live logs
+sudo journalctl -u dhcp-dashboard -f
+
+# Disable auto-start on boot
+sudo systemctl disable dhcp-dashboard
+
+# Re-enable auto-start on boot
+sudo systemctl enable dhcp-dashboard
+```
+
+## Network Configuration
+
+### Access Point Mode Setup
+
+When you configure the Access Point through the web interface, the application automatically:
+
+1. **Configures hostapd** - Creates wireless access point on `wlan0`
+2. **Sets up network interfaces** - Assigns static IP `192.168.4.1/24` to both `wlan0` and `eth0`
+3. **Configures dnsmasq** - DHCP server for all devices (`192.168.4.10-192.168.4.250`)
+4. **Unified network** - Both wireless and wired devices on same subnet
+5. **No internet routing** - Isolated local network for testing/development
+
+### Network Topology
+
+```
+                    ┌─────────────────────┐
+                    │   Raspberry Pi      │
+                    │   (192.168.4.1)     │
+                    │                     │
+                    │  ┌──────┬──────┐   │
+                    │  │wlan0 │ eth0 │   │
+                    └──┴──────┴──────┴───┘
+                       │      │
+          ┌────────────┘      └──────────┐
+          │                               │
+    [Wi-Fi Clients]                  [Switch]
+    192.168.4.10-250                      │
+                                    ┌─────┴─────┐
+                                    │           │
+                              [Wired Device] [Wired Device]
+                              192.168.4.x    192.168.4.x
+```
+
+**Key Points:**
+- **Unified Network**: All devices (wireless + wired) on `192.168.4.x` subnet
+- **No Internet**: Isolated local network without external routing
+- **DHCP Range**: `192.168.4.10` to `192.168.4.250`
+- **Pi IP**: `192.168.4.1` (gateway for local network)
+- **Use Cases**: Network testing, IoT development, isolated lab environments
 
 ## Configuration Files
 
 The application manages:
-- `/etc/dnsmasq.conf` - DHCP/DNS configuration
-- `/etc/wpa_supplicant/wpa_supplicant.conf` - Wi-Fi settings
+- `/etc/dnsmasq.conf` - DHCP/DNS configuration (serves both interfaces)
+- `/etc/hostapd/hostapd.conf` - Access Point configuration
+- `/etc/dhcpcd.conf` - Network interface configuration (both wlan0 and eth0)
+- `/etc/wpa_supplicant/wpa_supplicant.conf` - Wi-Fi client settings (when in client mode)
+- `/etc/sysctl.conf` - Network configuration (IP forwarding disabled for local network)
 
 ## Requirements
 
 - Python 3.x
 - Flask
-- dnsmasq
+- dnsmasq (DHCP/DNS server)
+- hostapd (Access Point software)
 - sudo privileges for system operations
+
+## Use Cases
+
+### Scenario 1: Isolated Network Lab
+Create a completely isolated local network for testing without affecting your main network. Connect devices via Wi-Fi or Ethernet switch.
+
+### Scenario 2: IoT Development Environment
+Set up a dedicated network for IoT device testing and development. All devices can communicate with each other on the same subnet.
+
+### Scenario 3: Network Training/Education
+Perfect for teaching networking concepts (DHCP, DNS, subnetting) in a controlled, isolated environment.
+
+### Scenario 4: Portable Testing Environment
+Bring your Raspberry Pi with a small switch to create an instant network anywhere - no internet required!
+
+### Scenario 5: Security Testing Lab
+Create isolated environments for penetration testing or security research without exposing your main network.
 
 ## Logging
 
+### Application Logs
 All operations are logged to `dhcp_dashboard.log` for troubleshooting and audit purposes.
+
+### Connection Tracking
+The application automatically tracks all device connections and disconnections:
+- **Connection log**: `connection_log.json` - JSON format with detailed connection history
+- **Information logged**:
+  - Timestamp (ISO 8601 format)
+  - Event type (connect/disconnect)
+  - MAC address
+  - IP address
+  - Hostname (when available)
+  - Interface (wlan0 for wireless, eth0 for wired)
+
+**View in Dashboard**: The Connection History section displays:
+- Recent connections table with all details
+- Connection statistics (total connections, by interface, unique devices)
+- Currently active connections count
+- Real-time refresh capability
 
 ## Security Note
 

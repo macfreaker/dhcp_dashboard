@@ -3,7 +3,7 @@ from flask import Flask, request, render_template_string, flash, redirect, url_f
 import subprocess
 import re
 import shutil
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 import os
 import time
@@ -13,7 +13,11 @@ app.secret_key = 'your_secret_key_here'  # Replace with a real secret key
 
 DNSMASQ_CONF = '/etc/dnsmasq.conf'
 WPA_SUPPLICANT_CONF = '/etc/wpa_supplicant/wpa_supplicant.conf'
+HOSTAPD_CONF = '/etc/hostapd/hostapd.conf'
+DHCPCD_CONF = '/etc/dhcpcd.conf'
 LOG_FILE = 'dhcp_dashboard.log'
+CONNECTION_LOG_FILE = 'connection_log.json'
+DHCP_SCRIPT = '/usr/local/bin/dhcp-event.sh'
 
 logging.basicConfig(filename='dhcp_dashboard.log', level=logging.DEBUG)
 
@@ -126,6 +130,302 @@ def update_wifi_settings(ssid, password):
         return False
 
 
+def read_ap_config():
+    """Read current access point configuration from hostapd.conf"""
+    try:
+        config = {
+            'ssid': '',
+            'password': '',
+            'channel': '6',
+            'hw_mode': 'g',
+            'country': 'BE',
+            'enabled': False
+        }
+        
+        if os.path.exists(HOSTAPD_CONF):
+            with open(HOSTAPD_CONF, 'r') as f:
+                content = f.read()
+                ssid_match = re.search(r'ssid=(.+)', content)
+                if ssid_match:
+                    config['ssid'] = ssid_match.group(1)
+                password_match = re.search(r'wpa_passphrase=(.+)', content)
+                if password_match:
+                    config['password'] = password_match.group(1)
+                channel_match = re.search(r'channel=(\d+)', content)
+                if channel_match:
+                    config['channel'] = channel_match.group(1)
+                hw_mode_match = re.search(r'hw_mode=(.)', content)
+                if hw_mode_match:
+                    config['hw_mode'] = hw_mode_match.group(1)
+                country_match = re.search(r'country_code=(.+)', content)
+                if country_match:
+                    config['country'] = country_match.group(1)
+            
+            # Check if hostapd service is enabled
+            result = subprocess.run(['sudo', 'systemctl', 'is-enabled', 'hostapd'],
+                                  capture_output=True, text=True)
+            config['enabled'] = result.returncode == 0
+        
+        return config
+    except Exception as e:
+        logging.error(f"Error reading AP config: {str(e)}")
+        return config
+
+
+def configure_access_point(ssid, password, channel='6', hw_mode='g', country='BE'):
+    """Configure the Raspberry Pi as a wireless access point"""
+    try:
+        # Create hostapd configuration
+        hostapd_config = f'''interface=wlan0
+driver=nl80211
+ssid={ssid}
+hw_mode={hw_mode}
+channel={channel}
+wmm_enabled=0
+macaddr_acl=0
+auth_algs=1
+ignore_broadcast_ssid=0
+wpa=2
+wpa_passphrase={password}
+wpa_key_mgmt=WPA-PSK
+wpa_pairwise=TKIP
+rsn_pairwise=CCMP
+country_code={country}
+'''
+        
+        # Write hostapd configuration
+        with open(HOSTAPD_CONF, 'w') as f:
+            f.write(hostapd_config)
+        
+        # Update /etc/default/hostapd to point to config
+        default_hostapd = '/etc/default/hostapd'
+        if os.path.exists(default_hostapd):
+            with open(default_hostapd, 'r') as f:
+                lines = f.readlines()
+            
+            with open(default_hostapd, 'w') as f:
+                found = False
+                for line in lines:
+                    if line.startswith('#DAEMON_CONF=') or line.startswith('DAEMON_CONF='):
+                        f.write(f'DAEMON_CONF="{HOSTAPD_CONF}"\n')
+                        found = True
+                    else:
+                        f.write(line)
+                if not found:
+                    f.write(f'DAEMON_CONF="{HOSTAPD_CONF}"\n')
+        
+        logging.info(f"Configured access point: {ssid}")
+        return True
+    except Exception as e:
+        logging.error(f"Error configuring access point: {str(e)}")
+        return False
+
+
+def configure_network_interfaces():
+    """Configure network interfaces for AP mode (wlan0 as AP, eth0 for local network)"""
+    try:
+        # Configure dhcpcd to assign static IPs to both interfaces on same subnet
+        dhcpcd_config = '''
+# Local Network Configuration
+# Both interfaces on same subnet for unified network
+
+# Static IP configuration for wlan0 (Wireless Access Point)
+interface wlan0
+    static ip_address=192.168.4.1/24
+    nohook wpa_supplicant
+
+# Static IP configuration for eth0 (Wired/Switch connection)
+interface eth0
+    static ip_address=192.168.4.1/24
+'''
+        
+        # Backup existing dhcpcd.conf
+        if os.path.exists(DHCPCD_CONF):
+            backup_file = f"{DHCPCD_CONF}.backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            shutil.copy2(DHCPCD_CONF, backup_file)
+            logging.info(f"Backed up dhcpcd.conf to {backup_file}")
+        
+        # Read existing dhcpcd.conf and remove old wlan0/eth0 configurations
+        existing_lines = []
+        if os.path.exists(DHCPCD_CONF):
+            with open(DHCPCD_CONF, 'r') as f:
+                skip = False
+                for line in f:
+                    if line.strip().startswith('interface wlan0') or line.strip().startswith('interface eth0'):
+                        skip = True
+                        continue
+                    if skip and line.strip() and not line.startswith(' ') and not line.startswith('\t'):
+                        skip = False
+                    if not skip:
+                        existing_lines.append(line)
+        
+        # Write updated configuration
+        with open(DHCPCD_CONF, 'w') as f:
+            f.writelines(existing_lines)
+            f.write(dhcpcd_config)
+        
+        logging.info("Configured network interfaces for AP mode")
+        return True
+    except Exception as e:
+        logging.error(f"Error configuring network interfaces: {str(e)}")
+        return False
+
+
+def configure_dnsmasq_for_ap():
+    """Configure dnsmasq for unified local network (wlan0 + eth0)"""
+    try:
+        # Backup current dnsmasq configuration
+        backup_dnsmasq_conf()
+        
+        # Read existing configuration
+        with open(DNSMASQ_CONF, 'r') as f:
+            lines = f.readlines()
+        
+        # Remove old interface and dhcp-range settings
+        new_lines = []
+        for line in lines:
+            if not (line.startswith('interface=') or
+                   line.startswith('dhcp-range=') or
+                   line.startswith('bind-interfaces') or
+                   line.startswith('server=') or
+                   line.startswith('domain-needed') or
+                   line.startswith('bogus-priv') or
+                   line.startswith('listen-address=')):
+                new_lines.append(line)
+        
+        # Add unified network configuration
+        ap_config = '''# Unified Local Network Configuration
+# Listen on both wireless (wlan0) and wired (eth0) interfaces
+interface=wlan0
+interface=eth0
+bind-interfaces
+listen-address=192.168.4.1
+server=8.8.8.8
+server=8.8.4.4
+domain-needed
+bogus-priv
+# DHCP range for all devices (wireless + wired)
+dhcp-range=192.168.4.10,192.168.4.250,255.255.255.0,24h
+# Enable DHCP logging
+log-dhcp
+log-queries
+
+'''
+        
+        # Write updated configuration
+        with open(DNSMASQ_CONF, 'w') as f:
+            f.write(ap_config)
+            f.writelines(new_lines)
+        
+        logging.info("Configured dnsmasq for AP mode")
+        return True
+    except Exception as e:
+        logging.error(f"Error configuring dnsmasq for AP: {str(e)}")
+        return False
+
+
+def enable_ip_forwarding():
+    """Setup network bridging for unified local network (no internet routing)"""
+    try:
+        # Disable IP forwarding (no routing needed for local network)
+        with open('/etc/sysctl.conf', 'r') as f:
+            lines = f.readlines()
+        
+        with open('/etc/sysctl.conf', 'w') as f:
+            found = False
+            for line in lines:
+                if 'net.ipv4.ip_forward' in line:
+                    f.write('net.ipv4.ip_forward=0\n')
+                    found = True
+                else:
+                    f.write(line)
+            if not found:
+                f.write('\nnet.ipv4.ip_forward=0\n')
+        
+        # Apply sysctl changes
+        subprocess.run(['sudo', 'sysctl', '-p'], check=True)
+        
+        # Clear any existing NAT rules
+        subprocess.run(['sudo', 'iptables', '-t', 'nat', '-F'], capture_output=True)
+        subprocess.run(['sudo', 'iptables', '-F'], capture_output=True)
+        
+        logging.info("Configured for local network (no internet routing)")
+        return True
+    except Exception as e:
+        logging.error(f"Error enabling IP forwarding: {str(e)}")
+        return False
+
+
+def start_access_point():
+    """Start the access point services"""
+    try:
+        # Unmask and enable hostapd
+        subprocess.run(['sudo', 'systemctl', 'unmask', 'hostapd'], capture_output=True)
+        subprocess.run(['sudo', 'systemctl', 'enable', 'hostapd'], capture_output=True)
+        
+        # Restart services
+        subprocess.run(['sudo', 'systemctl', 'restart', 'dhcpcd'], capture_output=True)
+        time.sleep(2)
+        subprocess.run(['sudo', 'systemctl', 'restart', 'dnsmasq'], capture_output=True)
+        time.sleep(1)
+        subprocess.run(['sudo', 'systemctl', 'restart', 'hostapd'], capture_output=True)
+        
+        logging.info("Access point services started")
+        return True
+    except Exception as e:
+        logging.error(f"Error starting access point: {str(e)}")
+        return False
+
+
+def stop_access_point():
+    """Stop the access point services"""
+    try:
+        subprocess.run(['sudo', 'systemctl', 'stop', 'hostapd'], capture_output=True)
+        subprocess.run(['sudo', 'systemctl', 'disable', 'hostapd'], capture_output=True)
+        
+        logging.info("Access point services stopped")
+        return True
+    except Exception as e:
+        logging.error(f"Error stopping access point: {str(e)}")
+        return False
+
+
+def get_ap_status():
+    """Get the current status of the access point"""
+    try:
+        result = subprocess.run(['sudo', 'systemctl', 'is-active', 'hostapd'],
+                              capture_output=True, text=True)
+        is_active = result.stdout.strip() == 'active'
+        
+        status_result = subprocess.run(['sudo', 'systemctl', 'status', 'hostapd'],
+                                     capture_output=True, text=True)
+        
+        # Get connected clients
+        clients = []
+        try:
+            iw_result = subprocess.run(['sudo', 'iw', 'dev', 'wlan0', 'station', 'dump'],
+                                      capture_output=True, text=True)
+            stations = re.findall(r'Station ([0-9a-f:]+)', iw_result.stdout)
+            clients = stations
+        except:
+            pass
+        
+        return {
+            'active': is_active,
+            'status': status_result.stdout,
+            'clients': clients,
+            'client_count': len(clients)
+        }
+    except Exception as e:
+        logging.error(f"Error getting AP status: {str(e)}")
+        return {
+            'active': False,
+            'status': 'Error getting status',
+            'clients': [],
+            'client_count': 0
+        }
+
+
 @app.route('/api/hosts', methods=['GET'])
 def api_get_hosts():
     hosts = read_dhcp_hosts()
@@ -198,6 +498,173 @@ def api_download_logs():
     except Exception as e:
         logging.error(f"Error downloading log file: {str(e)}")
         return jsonify({'error': 'Failed to download log file'}), 500
+
+@app.route('/api/ap/config', methods=['GET'])
+def api_get_ap_config():
+    """Get current access point configuration"""
+    config = read_ap_config()
+    return jsonify(config)
+
+
+@app.route('/api/ap/config', methods=['POST'])
+def api_configure_ap():
+    """Configure access point"""
+    data = request.json
+    if not data or 'ssid' not in data or 'password' not in data:
+        return jsonify({'error': 'Missing required fields (ssid, password)'}), 400
+    
+    ssid = data['ssid']
+    password = data['password']
+    channel = data.get('channel', '6')
+    hw_mode = data.get('hw_mode', 'g')
+    country = data.get('country', 'BE')
+    
+    if len(password) < 8:
+        return jsonify({'error': 'Password must be at least 8 characters'}), 400
+    
+    try:
+        # Configure AP
+        if not configure_access_point(ssid, password, channel, hw_mode, country):
+            return jsonify({'error': 'Failed to configure access point'}), 500
+        
+        # Configure network interfaces
+        if not configure_network_interfaces():
+            return jsonify({'error': 'Failed to configure network interfaces'}), 500
+        
+        # Configure dnsmasq
+        if not configure_dnsmasq_for_ap():
+            return jsonify({'error': 'Failed to configure dnsmasq'}), 500
+        
+        # Enable IP forwarding
+        if not enable_ip_forwarding():
+            return jsonify({'error': 'Failed to enable IP forwarding'}), 500
+        
+        return jsonify({'message': 'Access point configured successfully'}), 200
+    except Exception as e:
+        logging.error(f"Error configuring AP via API: {str(e)}")
+        return jsonify({'error': f'Failed to configure access point: {str(e)}'}), 500
+
+
+@app.route('/api/ap/start', methods=['POST'])
+def api_start_ap():
+    """Start the access point"""
+    try:
+        if start_access_point():
+            return jsonify({'message': 'Access point started successfully'}), 200
+        else:
+            return jsonify({'error': 'Failed to start access point'}), 500
+    except Exception as e:
+        logging.error(f"Error starting AP via API: {str(e)}")
+        return jsonify({'error': f'Failed to start access point: {str(e)}'}), 500
+
+
+@app.route('/api/ap/stop', methods=['POST'])
+def api_stop_ap():
+    """Stop the access point"""
+    try:
+        if stop_access_point():
+            return jsonify({'message': 'Access point stopped successfully'}), 200
+        else:
+            return jsonify({'error': 'Failed to stop access point'}), 500
+    except Exception as e:
+        logging.error(f"Error stopping AP via API: {str(e)}")
+        return jsonify({'error': f'Failed to stop access point: {str(e)}'}), 500
+
+
+@app.route('/api/ap/status', methods=['GET'])
+
+@app.route('/api/connections', methods=['GET'])
+def api_get_connections():
+    """Get connection history"""
+    try:
+        limit = request.args.get('limit', default=100, type=int)
+        filter_type = request.args.get('type')  # 'connect' or 'disconnect'
+        filter_mac = request.args.get('mac')
+        filter_interface = request.args.get('interface')  # 'wlan0' or 'eth0'
+        
+        filtered = connection_history.copy()
+        
+        # Apply filters
+        if filter_type:
+            filtered = [c for c in filtered if c['event'] == filter_type]
+        if filter_mac:
+            filtered = [c for c in filtered if c['mac'].lower() == filter_mac.lower()]
+        if filter_interface:
+            filtered = [c for c in filtered if c['interface'] == filter_interface]
+        
+        # Return most recent first, limited
+        filtered = list(reversed(filtered))[:limit]
+        
+        return jsonify({
+            'total': len(connection_history),
+            'filtered': len(filtered),
+            'connections': filtered
+        })
+    except Exception as e:
+        logging.error(f"Error getting connections via API: {str(e)}")
+        return jsonify({'error': 'Failed to get connections'}), 500
+
+
+@app.route('/api/connections/active', methods=['GET'])
+def api_get_active_connections():
+    """Get currently active connections"""
+    try:
+        active = get_active_connections()
+        return jsonify({
+            'count': len(active),
+            'connections': active
+        })
+    except Exception as e:
+        logging.error(f"Error getting active connections: {str(e)}")
+        return jsonify({'error': 'Failed to get active connections'}), 500
+
+
+@app.route('/api/connections/monitor', methods=['POST'])
+def api_monitor_connections():
+    """Manually trigger connection monitoring"""
+    try:
+        monitor_connections()
+        return jsonify({'message': 'Connection monitoring completed'}), 200
+    except Exception as e:
+        logging.error(f"Error monitoring connections: {str(e)}")
+        return jsonify({'error': 'Failed to monitor connections'}), 500
+
+
+@app.route('/api/connections/stats', methods=['GET'])
+def api_get_connection_stats():
+    """Get connection statistics"""
+    try:
+        total_connections = len([c for c in connection_history if c['event'] == 'connect'])
+        total_disconnections = len([c for c in connection_history if c['event'] == 'disconnect'])
+        
+        # Count by interface
+        wlan_connections = len([c for c in connection_history if c['event'] == 'connect' and c['interface'] == 'wlan0'])
+        eth_connections = len([c for c in connection_history if c['event'] == 'connect' and c['interface'] == 'eth0'])
+        
+        # Unique devices
+        unique_macs = len(set(c['mac'] for c in connection_history))
+        
+        # Currently active
+        active = get_active_connections()
+        
+        return jsonify({
+            'total_connections': total_connections,
+            'total_disconnections': total_disconnections,
+            'wireless_connections': wlan_connections,
+            'wired_connections': eth_connections,
+            'unique_devices': unique_macs,
+            'currently_active': len(active),
+            'active_devices': active
+        })
+    except Exception as e:
+        logging.error(f"Error getting connection stats: {str(e)}")
+        return jsonify({'error': 'Failed to get statistics'}), 500
+
+def api_get_ap_status():
+    """Get access point status"""
+    status = get_ap_status()
+    return jsonify(status)
+
 
 
 @app.route('/', methods=['GET', 'POST'])
@@ -332,8 +799,51 @@ def dashboard():
                       "success")
             else:
                 flash("Failed to update Wi-Fi settings or connect to the new network.", "error")
+        elif action == 'configure_ap':
+            ssid = request.form.get('ap_ssid')
+            password = request.form.get('ap_password')
+            channel = request.form.get('ap_channel', '6')
+            if len(password) < 8:
+                flash("Access Point password must be at least 8 characters.", "error")
+            else:
+                try:
+                    if (configure_access_point(ssid, password, channel) and
+                        configure_network_interfaces() and
+                        configure_dnsmasq_for_ap() and
+                        enable_ip_forwarding()):
+                        flash("Access Point configured successfully. Use 'Start Access Point' to enable it.", "success")
+                    else:
+                        flash("Failed to configure Access Point.", "error")
+                except Exception as e:
+                    flash(f"Error configuring Access Point: {str(e)}", "error")
+        elif action == 'start_ap':
+            try:
+                if start_access_point():
+                    flash("Access Point started successfully.", "success")
+                else:
+                    flash("Failed to start Access Point.", "error")
+            except Exception as e:
+                flash(f"Error starting Access Point: {str(e)}", "error")
+        elif action == 'stop_ap':
+            try:
+                if stop_access_point():
+                    flash("Access Point stopped successfully.", "success")
+                else:
+                    flash("Failed to stop Access Point.", "error")
+            except Exception as e:
+                flash(f"Error stopping Access Point: {str(e)}", "error")
+        elif action == 'ap_status':
+            try:
+                status = get_ap_status()
+                if status['active']:
+                    flash(f"Access Point is ACTIVE\nConnected clients: {status['client_count']}\nClients: {', '.join(status['clients']) if status['clients'] else 'None'}", "success")
+                else:
+                    flash("Access Point is INACTIVE", "error")
+            except Exception as e:
+                flash(f"Error getting AP status: {str(e)}", "error")
 
     hosts = read_dhcp_hosts()
+    ap_config = read_ap_config()
     return render_template_string('''
 <!DOCTYPE html>
 <html lang="en">
@@ -643,6 +1153,47 @@ def dashboard():
                         <input type="submit" value="Update Wi-Fi Settings">
                     </form>
                 </div>
+                
+                <div class="form-container">
+                    <h2>Access Point Configuration</h2>
+                    <form method="post">
+                        <input type="hidden" name="action" value="configure_ap">
+                        <label for="ap_ssid">AP SSID:</label>
+                        <input type="text" id="ap_ssid" name="ap_ssid" value="{{ ap_config.ssid }}" required>
+                        <label for="ap_password">AP Password (min 8 chars):</label>
+                        <input type="password" id="ap_password" name="ap_password" value="{{ ap_config.password }}" required minlength="8">
+                        <label for="ap_channel">Channel:</label>
+                        <input type="text" id="ap_channel" name="ap_channel" value="{{ ap_config.channel }}" placeholder="6">
+                        <input type="submit" value="Configure Access Point">
+                    </form>
+                </div>
+            </div>
+            
+            <h2>Access Point Management</h2>
+            <p><strong>Status:</strong> <span style="color: {{ 'green' if ap_config.enabled else 'red' }};">{{ 'Active' if ap_config.enabled else 'Inactive' }}</span></p>
+            <form method="post" style="display: inline;">
+                <input type="hidden" name="action" value="start_ap" />
+                <input type="submit" value="Start Access Point" style="background-color: #28a745;" />
+            </form>
+            <form method="post" style="display: inline; margin-left: 10px;">
+                <input type="hidden" name="action" value="stop_ap" />
+                <input type="submit" value="Stop Access Point" style="background-color: #dc3545;" />
+            </form>
+            <form method="post" style="display: inline; margin-left: 10px;">
+                <input type="hidden" name="action" value="ap_status" />
+                <input type="submit" value="Check AP Status" />
+            </form>
+            
+            <h2>Connection History</h2>
+            <div style="margin-bottom: 20px;">
+                <p>Track all device connections (wired and wireless) with timestamps, MAC addresses, IP addresses, and hostnames.</p>
+                <button onclick="loadConnections()" style="padding: 10px 20px; background-color: #343f48; color: #ffd700; border: none; border-radius: 5px; cursor: pointer; margin-right: 10px;">Refresh Connections</button>
+                <button onclick="loadStats()" style="padding: 10px 20px; background-color: #17a2b8; color: white; border: none; border-radius: 5px; cursor: pointer;">View Statistics</button>
+            </div>
+            <div id="connectionHistory" style="background-color: #f9f9f9; padding: 15px; border-radius: 5px; max-height: 400px; overflow-y: auto;">
+                <p>Loading connection history...</p>
+            </div>
+            <div id="connectionStats" style="display: none; background-color: #e9ecef; padding: 15px; border-radius: 5px; margin-top: 10px;">
             </div>
             
             <h2>DNSMASQ Management</h2>
@@ -677,11 +1228,108 @@ def dashboard():
                 return confirm(`Are you sure you want to remove the host "${hostname}"?`);
             }
 
+            function loadConnections() {
+                fetch('/api/connections?limit=50')
+                    .then(response => response.json())
+                    .then(data => {
+                        const container = document.getElementById('connectionHistory');
+                        if (data.connections && data.connections.length > 0) {
+                            let html = '<h3>Recent Connections (Last 50)</h3>';
+                            html += '<table style="width: 100%; border-collapse: collapse;">';
+                            html += '<tr style="background-color: #343f48; color: #ffd700;">';
+                            html += '<th style="padding: 10px; text-align: left;">Time</th>';
+                            html += '<th style="padding: 10px; text-align: left;">Event</th>';
+                            html += '<th style="padding: 10px; text-align: left;">MAC Address</th>';
+                            html += '<th style="padding: 10px; text-align: left;">IP Address</th>';
+                            html += '<th style="padding: 10px; text-align: left;">Hostname</th>';
+                            html += '<th style="padding: 10px; text-align: left;">Interface</th>';
+                            html += '</tr>';
+                            
+                            data.connections.forEach((conn, index) => {
+                                const bgColor = index % 2 === 0 ? '#ffffff' : '#f2f2f2';
+                                const eventColor = conn.event === 'connect' ? '#28a745' : '#dc3545';
+                                const time = new Date(conn.timestamp).toLocaleString();
+                                
+                                html += `<tr style="background-color: ${bgColor};">`;
+                                html += `<td style="padding: 8px;">${time}</td>`;
+                                html += `<td style="padding: 8px; color: ${eventColor}; font-weight: bold;">${conn.event.toUpperCase()}</td>`;
+                                html += `<td style="padding: 8px; font-family: monospace;">${conn.mac}</td>`;
+                                html += `<td style="padding: 8px; font-family: monospace;">${conn.ip}</td>`;
+                                html += `<td style="padding: 8px;">${conn.hostname}</td>`;
+                                html += `<td style="padding: 8px;"><span style="background-color: ${conn.interface === 'wlan0' ? '#17a2b8' : '#6c757d'}; color: white; padding: 2px 8px; border-radius: 3px;">${conn.interface}</span></td>`;
+                                html += '</tr>';
+                            });
+                            
+                            html += '</table>';
+                            html += `<p style="margin-top: 10px; color: #666;">Total connections in history: ${data.total}</p>`;
+                            container.innerHTML = html;
+                        } else {
+                            container.innerHTML = '<p>No connection history available yet.</p>';
+                        }
+                    })
+                    .catch(error => {
+                        document.getElementById('connectionHistory').innerHTML = '<p style="color: red;">Error loading connections: ' + error + '</p>';
+                    });
+            }
+
+            function loadStats() {
+                fetch('/api/connections/stats')
+                    .then(response => response.json())
+                    .then(data => {
+                        const container = document.getElementById('connectionStats');
+                        let html = '<h3>Connection Statistics</h3>';
+                        html += '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">';
+                        
+                        html += `<div style="background-color: white; padding: 15px; border-radius: 5px; text-align: center;">
+                            <h4 style="margin: 0; color: #343f48;">Total Connections</h4>
+                            <p style="font-size: 24px; font-weight: bold; margin: 10px 0; color: #28a745;">${data.total_connections}</p>
+                        </div>`;
+                        
+                        html += `<div style="background-color: white; padding: 15px; border-radius: 5px; text-align: center;">
+                            <h4 style="margin: 0; color: #343f48;">Total Disconnections</h4>
+                            <p style="font-size: 24px; font-weight: bold; margin: 10px 0; color: #dc3545;">${data.total_disconnections}</p>
+                        </div>`;
+                        
+                        html += `<div style="background-color: white; padding: 15px; border-radius: 5px; text-align: center;">
+                            <h4 style="margin: 0; color: #343f48;">Wireless Connections</h4>
+                            <p style="font-size: 24px; font-weight: bold; margin: 10px 0; color: #17a2b8;">${data.wireless_connections}</p>
+                        </div>`;
+                        
+                        html += `<div style="background-color: white; padding: 15px; border-radius: 5px; text-align: center;">
+                            <h4 style="margin: 0; color: #343f48;">Wired Connections</h4>
+                            <p style="font-size: 24px; font-weight: bold; margin: 10px 0; color: #6c757d;">${data.wired_connections}</p>
+                        </div>`;
+                        
+                        html += `<div style="background-color: white; padding: 15px; border-radius: 5px; text-align: center;">
+                            <h4 style="margin: 0; color: #343f48;">Unique Devices</h4>
+                            <p style="font-size: 24px; font-weight: bold; margin: 10px 0; color: #ffc107;">${data.unique_devices}</p>
+                        </div>`;
+                        
+                        html += `<div style="background-color: white; padding: 15px; border-radius: 5px; text-align: center;">
+                            <h4 style="margin: 0; color: #343f48;">Currently Active</h4>
+                            <p style="font-size: 24px; font-weight: bold; margin: 10px 0; color: #28a745;">${data.currently_active}</p>
+                        </div>`;
+                        
+                        html += '</div>';
+                        container.innerHTML = html;
+                        container.style.display = 'block';
+                    })
+                    .catch(error => {
+                        document.getElementById('connectionStats').innerHTML = '<p style="color: red;">Error loading statistics: ' + error + '</p>';
+                        document.getElementById('connectionStats').style.display = 'block';
+                    });
+            }
+
+            // Load connections on page load
+            window.addEventListener('load', function() {
+                loadConnections();
+            });
+
         </script>
     </div>
 </body>
 </html>
-    ''', hosts=hosts)
+    ''', hosts=hosts, ap_config=ap_config)
 
 
 @app.route('/edit', methods=['GET', 'POST'])
@@ -827,6 +1475,9 @@ def remove_host():
         logging.error(f"Error removing host: {str(e)}")
     return redirect(url_for('dashboard'))
 
+
+# Initialize connection history on startup
+load_connection_history()
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, debug=True)
