@@ -8,6 +8,8 @@ from datetime import datetime, timedelta
 import logging
 import os
 import time
+import json
+from collections import defaultdict
 
 app = Flask(__name__)
 app.secret_key = 'your_secret_key_here'  # Replace with a real secret key
@@ -56,6 +58,124 @@ DHCPCD_CONF = '/etc/dhcpcd.conf'
 LOG_FILE = 'dhcp_dashboard.log'
 CONNECTION_LOG_FILE = 'connection_log.json'
 DHCP_SCRIPT = '/usr/local/bin/dhcp-event.sh'
+
+# Connection tracking
+connection_history = []
+
+def load_connection_history():
+    """Load connection history from JSON file"""
+    global connection_history
+    try:
+        if os.path.exists(CONNECTION_LOG_FILE):
+            with open(CONNECTION_LOG_FILE, 'r') as f:
+                connection_history = json.load(f)
+        logging.info(f"Loaded {len(connection_history)} connection records")
+    except Exception as e:
+        logging.error(f"Error loading connection history: {str(e)}")
+        connection_history = []
+
+def save_connection_history():
+    """Save connection history to JSON file"""
+    try:
+        with open(CONNECTION_LOG_FILE, 'w') as f:
+            json.dump(connection_history, f, indent=2)
+        logging.info(f"Saved {len(connection_history)} connection records")
+    except Exception as e:
+        logging.error(f"Error saving connection history: {str(e)}")
+
+def log_connection_event(event_type, mac, ip, hostname=None, interface='unknown'):
+    """Log a connection or disconnection event"""
+    try:
+        timestamp = datetime.now().isoformat()
+        event = {
+            'timestamp': timestamp,
+            'event': event_type,  # 'connect' or 'disconnect'
+            'mac': mac,
+            'ip': ip,
+            'hostname': hostname or 'Unknown',
+            'interface': interface  # 'wlan0' or 'eth0'
+        }
+        
+        connection_history.append(event)
+        save_connection_history()
+        
+        logging.info(f"Connection Event: {event_type.upper()} - {mac} ({ip}) - {hostname} on {interface}")
+    except Exception as e:
+        logging.error(f"Error logging connection event: {str(e)}")
+
+def parse_dnsmasq_leases():
+    """Parse dnsmasq leases file to get current connections"""
+    leases = []
+    lease_file = '/var/lib/misc/dnsmasq.leases'
+    try:
+        if os.path.exists(lease_file):
+            with open(lease_file, 'r') as f:
+                for line in f:
+                    parts = line.strip().split()
+                    if len(parts) >= 4:
+                        lease = {
+                            'expiry': parts[0],
+                            'mac': parts[1],
+                            'ip': parts[2],
+                            'hostname': parts[3] if len(parts) > 3 else 'Unknown',
+                            'client_id': parts[4] if len(parts) > 4 else ''
+                        }
+                        leases.append(lease)
+    except Exception as e:
+        logging.error(f"Error parsing dnsmasq leases: {str(e)}")
+    return leases
+
+def get_active_connections():
+    """Get currently active connections from dnsmasq leases"""
+    leases = parse_dnsmasq_leases()
+    active = []
+    
+    for lease in leases:
+        # Check if lease is still valid (expiry timestamp in future)
+        try:
+            expiry_ts = int(lease['expiry'])
+            current_ts = int(time.time())
+            if expiry_ts > current_ts:
+                active.append(lease)
+        except:
+            # If we can't parse expiry, assume it's active
+            active.append(lease)
+    
+    return active
+
+def monitor_connections():
+    """Monitor for new connections and disconnections"""
+    try:
+        # Get current active leases
+        current_leases = parse_dnsmasq_leases()
+        current_macs = {lease['mac']: lease for lease in current_leases}
+        
+        # Get previously known connections from last 5 minutes
+        recent_threshold = (datetime.now() - timedelta(minutes=5)).isoformat()
+        recent_connections = [
+            event for event in connection_history[-100:]  # Check last 100 events
+            if event['timestamp'] > recent_threshold and event['event'] == 'connect'
+        ]
+        recent_macs = {event['mac'] for event in recent_connections}
+        
+        # Check for new connections
+        for mac, lease in current_macs.items():
+            if mac not in recent_macs:
+                # Determine interface based on IP range or other factors
+                interface = 'wlan0' if lease['ip'].startswith('192.168.4.') else 'eth0'
+                log_connection_event('connect', mac, lease['ip'], lease['hostname'], interface)
+        
+        # Check for disconnections (MACs that were recently connected but not in current leases)
+        for mac in recent_macs:
+            if mac not in current_macs:
+                # Find the last connection event for this MAC
+                for event in reversed(connection_history):
+                    if event['mac'] == mac and event['event'] == 'connect':
+                        log_connection_event('disconnect', mac, event['ip'], event['hostname'], event['interface'])
+                        break
+                        
+    except Exception as e:
+        logging.error(f"Error monitoring connections: {str(e)}")
 
 logging.basicConfig(filename='dhcp_dashboard.log', level=logging.DEBUG)
 
