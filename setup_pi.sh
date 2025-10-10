@@ -180,11 +180,20 @@ if [ -f "/etc/dnsmasq.conf" ]; then
     
     # Remove all dhcp-host= lines to start fresh
     sed -i '/^dhcp-host=/d' /etc/dnsmasq.conf
-    print_success "Removed all existing DHCP host entries"
     
-    # Count remaining lines
-    REMAINING=$(grep -c "^" /etc/dnsmasq.conf || echo "0")
-    print_status "Starting with clean DHCP host list (0 entries)"
+    # Verify cleanup
+    DHCP_HOSTS=$(grep -c "^dhcp-host=" /etc/dnsmasq.conf || echo "0")
+    if [ "$DHCP_HOSTS" -eq 0 ]; then
+        print_success "Removed all existing DHCP host entries - starting with empty list"
+    else
+        print_warning "Found $DHCP_HOSTS remaining dhcp-host entries (this shouldn't happen)"
+    fi
+    
+    # Restart dnsmasq to apply clean configuration
+    print_status "Restarting dnsmasq with clean configuration..."
+    systemctl restart dnsmasq 2>/dev/null || true
+    sleep 2
+    print_success "DNSMASQ restarted with clean host list"
 else
     print_warning "No existing dnsmasq.conf found - will be created when you configure AP"
 fi
