@@ -20,7 +20,8 @@
 ## 📋 Overview
 
 Transform your Raspberry Pi into a powerful **network management hub** with:
-- 📡 **Wireless Access Point** broadcasting your own Wi-Fi network
+- 📡 **Wireless Access Point** (wlan0) broadcasting your own Wi-Fi network
+- 📶 **Wi-Fi Client** (wlan1 - USB adapter) for internet connectivity
 - 🔌 **Ethernet connectivity** for wired devices via switch
 - 🌐 **Unified local network** - all devices on same subnet (192.168.4.x)
 - 📊 **Connection tracking** with detailed logging
@@ -52,10 +53,12 @@ Transform your Raspberry Pi into a powerful **network management hub** with:
   - Check dnsmasq status
   - Create timestamped backups of the configuration file
 
-- **Wi-Fi Client Configuration**
-  - Connect to existing Wi-Fi networks as a client
+- **Wi-Fi Client Configuration** 📶
+  - Connect to existing Wi-Fi networks via **wlan1** (USB Wi-Fi adapter)
   - Update Wi-Fi SSID and password through the web interface
   - Automatically reconnect to new networks
+  - **Note:** Requires USB Wi-Fi dongle as wlan1
+  - wlan0 is reserved for Access Point mode
 
 - **System Management** 🔧
   - Shutdown the Raspberry Pi remotely through the web interface
@@ -288,43 +291,80 @@ sudo systemctl enable dhcp-dashboard
 
 ## 🌐 Network Configuration
 
-### 📡 Access Point Mode Setup
+### 📡 Dual Wi-Fi Adapter Setup
 
-When you configure the Access Point through the web interface, the application automatically:
+**Interface Assignment:**
+- **wlan0** (built-in): Access Point broadcasting your lab network
+- **wlan1** (USB dongle): Wi-Fi client for internet connectivity
+- **eth0** (ethernet): Wired devices via switch
 
-1. **Configures hostapd** - Creates wireless access point on `wlan0`
-2. **Sets up network interfaces** - Assigns static IP `192.168.4.1/24` to both `wlan0` and `eth0`
-3. **Configures dnsmasq** - DHCP server for all devices (`192.168.4.10-192.168.4.250`)
-4. **Unified network** - Both wireless and wired devices on same subnet
-5. **No internet routing** - Isolated local network for testing/development
+When you configure through the web interface:
 
-### 🔗 Network Topology
+1. **Access Point (wlan0)** - Configure and start your lab network
+   - Broadcasts SSID on wlan0
+   - Static IP: `192.168.4.1/24`
+   - DHCP range: `192.168.4.10-250`
+
+2. **Wi-Fi Client (wlan1)** - Connect to external Wi-Fi
+   - Use "Wi-Fi Configuration" form
+   - Connects to internet/upstream network
+   - Gets IP via DHCP from that network
+   - **Requires USB Wi-Fi adapter**
+
+3. **Network Configuration** automatically handles:
+   - Static IP `192.168.4.1/24` for wlan0 and eth0
+   - DHCP client on wlan1
+   - DNS server for local network
+   - Unified subnet for AP clients
+
+### 🔗 Network Topology (Dual Wi-Fi Adapter Setup)
 
 ```
-                    ┌─────────────────────┐
-                    │   Raspberry Pi      │
-                    │   (192.168.4.1)     │
-                    │                     │
-                    │  ┌──────┬──────┐   │
-                    │  │wlan0 │ eth0 │   │
-                    └──┴──────┴──────┴───┘
-                       │      │
-          ┌────────────┘      └──────────┐
-          │                               │
-    [Wi-Fi Clients]                  [Switch]
-    192.168.4.10-250                      │
-                                    ┌─────┴─────┐
-                                    │           │
-                              [Wired Device] [Wired Device]
-                              192.168.4.x    192.168.4.x
+    [Internet/Router]
+           │
+           │ (Wi-Fi)
+           │
+      ┌────┴────────────────────────────┐
+      │    Raspberry Pi                 │
+      │    wlan0: 192.168.4.1 (AP)     │
+      │    wlan1: DHCP (Client)        │
+      │    eth0:  192.168.4.1 (Wired)  │
+      │                                 │
+      │  ┌───────┬────────┬──────┐    │
+      │  │ wlan0 │ wlan1  │ eth0 │    │
+      └──┴───────┴────────┴──────┴─────┘
+         │        │        │
+         │        │        └──────────┐
+         │        │                   │
+         │     [Internet]         [Switch]
+         │     Connection             │
+         │                      ┌─────┴─────┐
+    [Wi-Fi Clients]             │           │
+    192.168.4.10-250      [Wired]     [Wired]
+                          Device      Device
+                          192.168.4.x 192.168.4.x
 ```
+
+**Interface Details:**
+- **wlan0 (built-in)**: Access Point @ `192.168.4.1`
+  - Broadcasts your lab network SSID
+  - Clients get IPs: `192.168.4.10-250`
+  
+- **wlan1 (USB dongle)**: Wi-Fi Client (optional)
+  - Connects to upstream Wi-Fi for internet
+  - Gets IP via DHCP from that network
+  - Can share internet to lab network (if configured)
+  
+- **eth0 (ethernet)**: Wired network @ `192.168.4.1`
+  - Connect switch for wired devices
+  - Same subnet as wlan0
 
 **Key Points:**
-- **Unified Network**: All devices (wireless + wired) on `192.168.4.x` subnet
-- **No Internet**: Isolated local network without external routing
+- **Unified Network**: All local devices on `192.168.4.x` subnet
+- **Dual Wi-Fi**: wlan0 for AP, wlan1 for client (requires USB adapter)
 - **DHCP Range**: `192.168.4.10` to `192.168.4.250`
 - **Pi IP**: `192.168.4.1` (gateway for local network)
-- **Use Cases**: Network testing, IoT development, isolated lab environments
+- **Internet**: Optional via wlan1 connection
 
 ---
 

@@ -285,39 +285,40 @@ def shutdown_pi():
 
 
 def update_wifi_settings(ssid, password):
+    """Configure wlan1 as Wi-Fi client (wlan0 is reserved for Access Point)"""
     try:
         wpa_config = f'''
-                ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
-                update_config=1
-                country=BE
+ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+update_config=1
+country=BE
 
-                network={{
-                    ssid="{ssid}"
-                    psk="{password}"
-                }}
-        '''
+network={{
+    ssid="{ssid}"
+    psk="{password}"
+}}
+'''
         with open(WPA_SUPPLICANT_CONF, 'w') as f:
             f.write(wpa_config)
 
-        # Restart the Wi-Fi interface
-        subprocess.run(['sudo', 'ifconfig', 'wlan0', 'down'], check=True)
+        # Restart wlan1 (USB Wi-Fi adapter for client connection)
+        subprocess.run(['sudo', 'ifconfig', 'wlan1', 'down'], check=True)
         time.sleep(1)
-        subprocess.run(['sudo', 'ifconfig', 'wlan0', 'up'], check=True)
+        subprocess.run(['sudo', 'ifconfig', 'wlan1', 'up'], check=True)
         time.sleep(2)
-        subprocess.run(['sudo', 'wpa_cli', '-i', 'wlan0', 'reconfigure'], check=True)
+        subprocess.run(['sudo', 'wpa_cli', '-i', 'wlan1', 'reconfigure'], check=True)
 
-        # Wait for the connection to be established
+        # Wait for the connection to be established on wlan1
         for _ in range(30):  # Wait up to 30 seconds
-            result = subprocess.run(['iwgetid', '-r'], capture_output=True, text=True)
+            result = subprocess.run(['iwgetid', 'wlan1', '-r'], capture_output=True, text=True)
             if result.stdout.strip() == ssid:
-                logging.info(f"Successfully connected to Wi-Fi network: {ssid}")
+                logging.info(f"Successfully connected to Wi-Fi network: {ssid} on wlan1")
                 return True
             time.sleep(1)
 
-        logging.error(f"Failed to connect to Wi-Fi network: {ssid}")
+        logging.error(f"Failed to connect to Wi-Fi network: {ssid} on wlan1")
         return False
     except Exception as e:
-        logging.error(f"Error updating Wi-Fi settings: {str(e)}")
+        logging.error(f"Error updating Wi-Fi settings on wlan1: {str(e)}")
         return False
 
 
@@ -413,12 +414,14 @@ country_code={country}
 
 
 def configure_network_interfaces():
-    """Configure network interfaces for AP mode (wlan0 as AP, eth0 for local network)"""
+    """Configure network interfaces - wlan0 for AP, wlan1 for Wi-Fi client, eth0 for local network"""
     try:
-        # Configure dhcpcd to assign static IPs to both interfaces on same subnet
+        # Configure dhcpcd for dual Wi-Fi adapter setup
         dhcpcd_config = '''
 # Local Network Configuration
-# Both interfaces on same subnet for unified network
+# wlan0 = Access Point (static IP)
+# wlan1 = Wi-Fi Client (DHCP or will be configured separately)
+# eth0 = Wired/Switch connection (static IP)
 
 # Static IP configuration for wlan0 (Wireless Access Point)
 interface wlan0
@@ -428,6 +431,11 @@ interface wlan0
 # Static IP configuration for eth0 (Wired/Switch connection)
 interface eth0
     static ip_address=192.168.4.1/24
+
+# wlan1 (USB Wi-Fi adapter) - Wi-Fi Client mode (uses wpa_supplicant)
+# Gets IP via DHCP from the network it connects to
+interface wlan1
+    # DHCP client - automatically configured
 '''
         
         # Backup existing dhcpcd.conf
@@ -436,13 +444,15 @@ interface eth0
             shutil.copy2(DHCPCD_CONF, backup_file)
             logging.info(f"Backed up dhcpcd.conf to {backup_file}")
         
-        # Read existing dhcpcd.conf and remove old wlan0/eth0 configurations
+        # Read existing dhcpcd.conf and remove old wlan0/wlan1/eth0 configurations
         existing_lines = []
         if os.path.exists(DHCPCD_CONF):
             with open(DHCPCD_CONF, 'r') as f:
                 skip = False
                 for line in f:
-                    if line.strip().startswith('interface wlan0') or line.strip().startswith('interface eth0'):
+                    if (line.strip().startswith('interface wlan0') or
+                        line.strip().startswith('interface wlan1') or
+                        line.strip().startswith('interface eth0')):
                         skip = True
                         continue
                     if skip and line.strip() and not line.startswith(' ') and not line.startswith('\t'):
@@ -1372,8 +1382,21 @@ def dashboard():
                         <input type="text" id="ap_ssid" name="ap_ssid" value="{{ ap_config.ssid }}" required>
                         <label for="ap_password">AP Password (min 8 chars):</label>
                         <input type="password" id="ap_password" name="ap_password" value="{{ ap_config.password }}" required minlength="8">
-                        <label for="ap_channel">Channel:</label>
-                        <input type="text" id="ap_channel" name="ap_channel" value="{{ ap_config.channel }}" placeholder="6">
+                        <label for="ap_channel">Wi-Fi Channel (2.4GHz):</label>
+                        <select id="ap_channel" name="ap_channel" style="width: 100%; padding: 0.5rem; margin-bottom: 1rem; border: 1px solid #ddd; border-radius: 4px;">
+                            <option value="1" {{ 'selected' if ap_config.channel == '1' else '' }}>Channel 1 (2412 MHz)</option>
+                            <option value="2" {{ 'selected' if ap_config.channel == '2' else '' }}>Channel 2 (2417 MHz)</option>
+                            <option value="3" {{ 'selected' if ap_config.channel == '3' else '' }}>Channel 3 (2422 MHz)</option>
+                            <option value="4" {{ 'selected' if ap_config.channel == '4' else '' }}>Channel 4 (2427 MHz)</option>
+                            <option value="5" {{ 'selected' if ap_config.channel == '5' else '' }}>Channel 5 (2432 MHz)</option>
+                            <option value="6" {{ 'selected' if ap_config.channel == '6' else '' }}>Channel 6 (2437 MHz) - Default</option>
+                            <option value="7" {{ 'selected' if ap_config.channel == '7' else '' }}>Channel 7 (2442 MHz)</option>
+                            <option value="8" {{ 'selected' if ap_config.channel == '8' else '' }}>Channel 8 (2447 MHz)</option>
+                            <option value="9" {{ 'selected' if ap_config.channel == '9' else '' }}>Channel 9 (2452 MHz)</option>
+                            <option value="10" {{ 'selected' if ap_config.channel == '10' else '' }}>Channel 10 (2457 MHz)</option>
+                            <option value="11" {{ 'selected' if ap_config.channel == '11' else '' }}>Channel 11 (2462 MHz)</option>
+                        </select>
+                        <p style="font-size: 0.85em; color: #666; margin-top: -0.5rem;">💡 Recommended: 1, 6, or 11 (non-overlapping)</p>
                         <input type="submit" value="Configure Access Point">
                     </form>
                 </div>
