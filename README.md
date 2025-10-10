@@ -36,7 +36,20 @@ A Flask web application that provides a comprehensive dashboard for managing DHC
   - Shutdown the Raspberry Pi remotely through the web interface
   - Includes confirmation screen for safety
 
-### 🔌 RESTful API Endpoints
+### 📚 Interactive API Documentation (Swagger UI)
+
+Access the **interactive Swagger UI** for complete API documentation and testing:
+
+**Swagger URL:** `http://192.168.4.1:8080/api/docs`
+
+Features:
+- 📖 Complete API documentation with request/response examples
+- 🧪 Interactive testing - try API calls directly from your browser
+- 📋 Request/response schemas for all endpoints
+- 🔍 Parameter descriptions and validation rules
+- 🎯 Organized by namespaces (Hosts, Access Point, Connections, Logs)
+
+### � RESTful API Endpoints
 
 #### Host Management
 - **List all hosts**
@@ -122,8 +135,47 @@ curl -X POST http://your-ip:8080/api/connections/monitor
   curl -O http://your-ip:8080/api/logs/download
   ```
 
-### 🛠️ Third-Party Tools
-You can use tools like Postman, Insomnia, or any HTTP client to interact with the API endpoints.
+### 🛠️ API Testing Tools
+
+**Recommended:**
+1. **Swagger UI** (Built-in) - `http://192.168.4.1:8080/api/docs`
+   - Interactive browser-based testing
+   - No additional software needed
+   - Complete documentation
+
+2. **Third-Party Tools:**
+   - Postman
+   - Insomnia
+   - curl (command line)
+   - Any HTTP client
+
+**OpenAPI Specification:**
+The API follows OpenAPI 3.0 standards, accessible at: `http://192.168.4.1:8080/api/swagger.json`
+
+### Swagger UI Quick Start
+
+1. **After setup, access Swagger:**
+   ```
+   http://192.168.4.1:8080/api/docs
+   ```
+
+2. **Explore API endpoints** organized in namespaces:
+   - `hosts` - DHCP host management
+   - `ap` - Access Point configuration
+   - `connections` - Connection tracking
+   - `logs` - Application logs
+
+3. **Try it out:**
+   - Click any endpoint
+   - Click "Try it out"
+   - Fill in parameters
+   - Click "Execute"
+   - View response
+
+4. **View schemas:**
+   - See request/response formats
+   - Understand data structures
+   - Copy example JSON for your own tools
 
 ## Installation
 

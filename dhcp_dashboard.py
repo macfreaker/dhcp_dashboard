@@ -1,5 +1,6 @@
 import flask
 from flask import Flask, request, render_template_string, flash, redirect, url_for, jsonify, send_file
+from flask_restx import Api, Resource, fields, Namespace
 import subprocess
 import re
 import shutil
@@ -10,6 +11,43 @@ import time
 
 app = Flask(__name__)
 app.secret_key = 'your_secret_key_here'  # Replace with a real secret key
+
+# Initialize Flask-RESTX for Swagger documentation
+api = Api(app, version='1.0', title='DHCP Dashboard API',
+    description='RESTful API for managing DHCP/DNS and Access Point on Raspberry Pi',
+    doc='/api/docs',  # Swagger UI will be available at this endpoint
+    prefix='/api'
+)
+
+# Create namespaces for organizing API endpoints
+ns_hosts = api.namespace('hosts', description='DHCP host management operations')
+ns_ap = api.namespace('ap', description='Access Point configuration and management')
+ns_connections = api.namespace('connections', description='Connection tracking and monitoring')
+ns_logs = api.namespace('logs', description='Application log management')
+# API Models for Swagger documentation
+host_model = api.model('Host', {
+    'mac': fields.String(required=True, description='MAC address (format: aa:bb:cc:dd:ee:ff)', example='00:11:22:33:44:55'),
+    'hostname': fields.String(required=True, description='Device hostname', example='laptop'),
+    'ip': fields.String(required=False, description='Static IP address (optional)', example='192.168.4.50')
+})
+
+ap_config_model = api.model('AccessPointConfig', {
+    'ssid': fields.String(required=True, description='Access Point SSID', example='MyLabNetwork'),
+    'password': fields.String(required=True, description='WPA2 password (min 8 characters)', example='securepass123'),
+    'channel': fields.String(required=False, description='Wi-Fi channel', example='6'),
+    'hw_mode': fields.String(required=False, description='Hardware mode (a/b/g/n)', example='g'),
+    'country': fields.String(required=False, description='Country code', example='BE')
+})
+
+connection_model = api.model('Connection', {
+    'timestamp': fields.String(description='ISO 8601 timestamp', example='2024-01-15T10:30:00'),
+    'event': fields.String(description='Event type', enum=['connect', 'disconnect']),
+    'mac': fields.String(description='MAC address', example='aa:bb:cc:dd:ee:ff'),
+    'ip': fields.String(description='IP address', example='192.168.4.15'),
+    'hostname': fields.String(description='Device hostname', example='laptop'),
+    'interface': fields.String(description='Network interface', enum=['wlan0', 'eth0'])
+})
+
 
 DNSMASQ_CONF = '/etc/dnsmasq.conf'
 WPA_SUPPLICANT_CONF = '/etc/wpa_supplicant/wpa_supplicant.conf'
@@ -426,165 +464,200 @@ def get_ap_status():
         }
 
 
-@app.route('/api/hosts', methods=['GET'])
-def api_get_hosts():
-    hosts = read_dhcp_hosts()
-    return jsonify([{'mac': mac, 'hostname': hostname, 'ip': ip} for mac, hostname, ip in hosts])
-
-
-@app.route('/api/hosts', methods=['POST'])
-def api_add_host():
-    data = request.json
-    if not data or 'mac' not in data or 'hostname' not in data:
-        return jsonify({'error': 'Missing required fields'}), 400
-
-    mac = data['mac']
-    hostname = data['hostname']
-    ip = data.get('ip')
-
-    hosts = read_dhcp_hosts()
-    if any(h[0] == mac for h in hosts):
-        return jsonify({'error': 'MAC address already exists'}), 400
-    if any(h[1] == hostname for h in hosts):
-        return jsonify({'error': 'Hostname already exists'}), 400
-
-    hosts.append((mac, hostname, ip))
-    try:
-        write_dhcp_hosts(hosts)
-        restart_dnsmasq()
-        return jsonify({'message': 'Host added successfully'}), 201
-    except Exception as e:
-        logging.error(f"Error adding host via API: {str(e)}")
-        return jsonify({'error': 'Failed to add host'}), 500
-
-
-@app.route('/api/hosts/<mac>', methods=['DELETE'])
-def api_remove_host(mac):
-    hosts = read_dhcp_hosts()
-    original_count = len(hosts)
-    hosts = [h for h in hosts if h[0] != mac]
-    if len(hosts) == original_count:
-        return jsonify({'error': 'Host not found'}), 404
-
-    try:
-        write_dhcp_hosts(hosts)
-        restart_dnsmasq()
-        return jsonify({'message': 'Host removed successfully'}), 200
-    except Exception as e:
-        logging.error(f"Error removing host via API: {str(e)}")
-        return jsonify({'error': 'Failed to remove host'}), 500
-
-
-@app.route('/api/logs', methods=['GET'])
-def api_get_logs():
-    lines = request.args.get('lines', default=50, type=int)
-    try:
-        with open(LOG_FILE, 'r') as file:
-            log_contents = file.readlines()
-
-        # Get the last 'lines' number of log entries
-        last_logs = log_contents[-lines:]
-
-        return jsonify({'logs': last_logs})
-    except Exception as e:
-        logging.error(f"Error reading log file: {str(e)}")
-        return jsonify({'error': 'Failed to read log file'}), 500
-
-
-@app.route('/api/logs/download', methods=['GET'])
-def api_download_logs():
-    try:
-        return send_file(LOG_FILE, as_attachment=True)
-    except Exception as e:
-        logging.error(f"Error downloading log file: {str(e)}")
-        return jsonify({'error': 'Failed to download log file'}), 500
-
-@app.route('/api/ap/config', methods=['GET'])
-def api_get_ap_config():
-    """Get current access point configuration"""
-    config = read_ap_config()
-    return jsonify(config)
-
-
-@app.route('/api/ap/config', methods=['POST'])
-def api_configure_ap():
-    """Configure access point"""
-    data = request.json
-    if not data or 'ssid' not in data or 'password' not in data:
-        return jsonify({'error': 'Missing required fields (ssid, password)'}), 400
+@ns_hosts.route('')
+class HostList(Resource):
+    @ns_hosts.doc('list_hosts')
+    @ns_hosts.marshal_list_with(host_model)
+    def get(self):
+        '''List all DHCP hosts'''
+        hosts = read_dhcp_hosts()
+        return [{'mac': mac, 'hostname': hostname, 'ip': ip or ''} for mac, hostname, ip in hosts]
     
-    ssid = data['ssid']
-    password = data['password']
-    channel = data.get('channel', '6')
-    hw_mode = data.get('hw_mode', 'g')
-    country = data.get('country', 'BE')
+    @ns_hosts.doc('create_host')
+    @ns_hosts.expect(host_model)
+    @ns_hosts.response(201, 'Host created successfully')
+    @ns_hosts.response(400, 'Validation error')
+    def post(self):
+        '''Add a new DHCP host'''
+        data = api.payload
+        if not data or 'mac' not in data or 'hostname' not in data:
+            api.abort(400, 'Missing required fields (mac, hostname)')
+
+        mac = data['mac']
+        hostname = data['hostname']
+        ip = data.get('ip')
+
+        hosts = read_dhcp_hosts()
+        if any(h[0] == mac for h in hosts):
+            api.abort(400, 'MAC address already exists')
+        if any(h[1] == hostname for h in hosts):
+            api.abort(400, 'Hostname already exists')
+
+        hosts.append((mac, hostname, ip))
+        try:
+            write_dhcp_hosts(hosts)
+            restart_dnsmasq()
+            return {'message': 'Host added successfully'}, 201
+        except Exception as e:
+            logging.error(f"Error adding host via API: {str(e)}")
+            api.abort(500, 'Failed to add host')
+
+
+@ns_hosts.route('/<string:mac>')
+@ns_hosts.param('mac', 'The MAC address')
+class Host(Resource):
+    @ns_hosts.doc('delete_host')
+    @ns_hosts.response(200, 'Host deleted successfully')
+    @ns_hosts.response(404, 'Host not found')
+    def delete(self, mac):
+        '''Delete a DHCP host by MAC address'''
+        hosts = read_dhcp_hosts()
+        original_count = len(hosts)
+        hosts = [h for h in hosts if h[0] != mac]
+        if len(hosts) == original_count:
+            api.abort(404, 'Host not found')
+
+        try:
+            write_dhcp_hosts(hosts)
+            restart_dnsmasq()
+            return {'message': 'Host removed successfully'}, 200
+        except Exception as e:
+            logging.error(f"Error removing host via API: {str(e)}")
+            api.abort(500, 'Failed to remove host')
+
+
+@ns_logs.route('')
+class LogsList(Resource):
+    @ns_logs.doc('get_logs')
+    @ns_logs.param('lines', 'Number of log lines to retrieve (default: 50)')
+    def get(self):
+        '''Get application logs'''
+        lines = request.args.get('lines', default=50, type=int)
+        try:
+            with open(LOG_FILE, 'r') as file:
+                log_contents = file.readlines()
+            last_logs = log_contents[-lines:]
+            return {'logs': last_logs}
+        except Exception as e:
+            logging.error(f"Error reading log file: {str(e)}")
+            api.abort(500, 'Failed to read log file')
+
+
+@ns_logs.route('/download')
+class LogsDownload(Resource):
+    @ns_logs.doc('download_logs')
+    def get(self):
+        '''Download complete log file'''
+        try:
+            return send_file(LOG_FILE, as_attachment=True)
+        except Exception as e:
+            logging.error(f"Error downloading log file: {str(e)}")
+            api.abort(500, 'Failed to download log file')
+
+
+@ns_ap.route('/config')
+class AccessPointConfig(Resource):
+    @ns_ap.doc('get_ap_config')
+    def get(self):
+        '''Get current Access Point configuration'''
+        config = read_ap_config()
+        return config
     
-    if len(password) < 8:
-        return jsonify({'error': 'Password must be at least 8 characters'}), 400
-    
-    try:
-        # Configure AP
-        if not configure_access_point(ssid, password, channel, hw_mode, country):
-            return jsonify({'error': 'Failed to configure access point'}), 500
+    @ns_ap.doc('configure_ap')
+    @ns_ap.expect(ap_config_model)
+    @ns_ap.response(200, 'Access Point configured successfully')
+    @ns_ap.response(400, 'Validation error')
+    def post(self):
+        '''Configure Access Point settings'''
+        data = api.payload
+        if not data or 'ssid' not in data or 'password' not in data:
+            api.abort(400, 'Missing required fields (ssid, password)')
         
-        # Configure network interfaces
-        if not configure_network_interfaces():
-            return jsonify({'error': 'Failed to configure network interfaces'}), 500
+        ssid = data['ssid']
+        password = data['password']
+        channel = data.get('channel', '6')
+        hw_mode = data.get('hw_mode', 'g')
+        country = data.get('country', 'BE')
         
-        # Configure dnsmasq
-        if not configure_dnsmasq_for_ap():
-            return jsonify({'error': 'Failed to configure dnsmasq'}), 500
+        if len(password) < 8:
+            api.abort(400, 'Password must be at least 8 characters')
         
-        # Enable IP forwarding
-        if not enable_ip_forwarding():
-            return jsonify({'error': 'Failed to enable IP forwarding'}), 500
-        
-        return jsonify({'message': 'Access point configured successfully'}), 200
-    except Exception as e:
-        logging.error(f"Error configuring AP via API: {str(e)}")
-        return jsonify({'error': f'Failed to configure access point: {str(e)}'}), 500
+        try:
+            if not configure_access_point(ssid, password, channel, hw_mode, country):
+                api.abort(500, 'Failed to configure access point')
+            
+            if not configure_network_interfaces():
+                api.abort(500, 'Failed to configure network interfaces')
+            
+            if not configure_dnsmasq_for_ap():
+                api.abort(500, 'Failed to configure dnsmasq')
+            
+            if not enable_ip_forwarding():
+                api.abort(500, 'Failed to configure network')
+            
+            return {'message': 'Access point configured successfully'}, 200
+        except Exception as e:
+            logging.error(f"Error configuring AP via API: {str(e)}")
+            api.abort(500, f'Failed to configure access point: {str(e)}')
 
 
-@app.route('/api/ap/start', methods=['POST'])
-def api_start_ap():
-    """Start the access point"""
-    try:
-        if start_access_point():
-            return jsonify({'message': 'Access point started successfully'}), 200
-        else:
-            return jsonify({'error': 'Failed to start access point'}), 500
-    except Exception as e:
-        logging.error(f"Error starting AP via API: {str(e)}")
-        return jsonify({'error': f'Failed to start access point: {str(e)}'}), 500
+@ns_ap.route('/start')
+class AccessPointStart(Resource):
+    @ns_ap.doc('start_ap')
+    @ns_ap.response(200, 'Access Point started')
+    def post(self):
+        '''Start the Access Point'''
+        try:
+            if start_access_point():
+                return {'message': 'Access point started successfully'}, 200
+            else:
+                api.abort(500, 'Failed to start access point')
+        except Exception as e:
+            logging.error(f"Error starting AP via API: {str(e)}")
+            api.abort(500, f'Failed to start access point: {str(e)}')
 
 
-@app.route('/api/ap/stop', methods=['POST'])
-def api_stop_ap():
-    """Stop the access point"""
-    try:
-        if stop_access_point():
-            return jsonify({'message': 'Access point stopped successfully'}), 200
-        else:
-            return jsonify({'error': 'Failed to stop access point'}), 500
-    except Exception as e:
-        logging.error(f"Error stopping AP via API: {str(e)}")
-        return jsonify({'error': f'Failed to stop access point: {str(e)}'}), 500
+@ns_ap.route('/stop')
+class AccessPointStop(Resource):
+    @ns_ap.doc('stop_ap')
+    @ns_ap.response(200, 'Access Point stopped')
+    def post(self):
+        '''Stop the Access Point'''
+        try:
+            if stop_access_point():
+                return {'message': 'Access point stopped successfully'}, 200
+            else:
+                api.abort(500, 'Failed to stop access point')
+        except Exception as e:
+            logging.error(f"Error stopping AP via API: {str(e)}")
+            api.abort(500, f'Failed to stop access point: {str(e)}')
 
 
-@app.route('/api/ap/status', methods=['GET'])
+@ns_ap.route('/status')
+class AccessPointStatus(Resource):
+    @ns_ap.doc('get_ap_status')
+    def get(self):
+        '''Get Access Point status and connected clients'''
+        status = get_ap_status()
+        return status
 
-@app.route('/api/connections', methods=['GET'])
-def api_get_connections():
-    """Get connection history"""
-    try:
+
+@ns_connections.route('')
+class ConnectionList(Resource):
+    @ns_connections.doc('get_connections')
+    @ns_connections.param('limit', 'Maximum number of results (default: 100)')
+    @ns_connections.param('type', 'Filter by event type (connect/disconnect)')
+    @ns_connections.param('mac', 'Filter by MAC address')
+    @ns_connections.param('interface', 'Filter by interface (wlan0/eth0)')
+    def get(self):
+        '''Get connection history with optional filters'''
         limit = request.args.get('limit', default=100, type=int)
-        filter_type = request.args.get('type')  # 'connect' or 'disconnect'
+        filter_type = request.args.get('type')
         filter_mac = request.args.get('mac')
-        filter_interface = request.args.get('interface')  # 'wlan0' or 'eth0'
+        filter_interface = request.args.get('interface')
         
         filtered = connection_history.copy()
         
-        # Apply filters
         if filter_type:
             filtered = [c for c in filtered if c['event'] == filter_type]
         if filter_mac:
@@ -592,62 +665,56 @@ def api_get_connections():
         if filter_interface:
             filtered = [c for c in filtered if c['interface'] == filter_interface]
         
-        # Return most recent first, limited
         filtered = list(reversed(filtered))[:limit]
         
-        return jsonify({
+        return {
             'total': len(connection_history),
             'filtered': len(filtered),
             'connections': filtered
-        })
-    except Exception as e:
-        logging.error(f"Error getting connections via API: {str(e)}")
-        return jsonify({'error': 'Failed to get connections'}), 500
+        }
 
 
-@app.route('/api/connections/active', methods=['GET'])
-def api_get_active_connections():
-    """Get currently active connections"""
-    try:
+@ns_connections.route('/active')
+class ConnectionActive(Resource):
+    @ns_connections.doc('get_active_connections')
+    def get(self):
+        '''Get currently active connections'''
         active = get_active_connections()
-        return jsonify({
+        return {
             'count': len(active),
             'connections': active
-        })
-    except Exception as e:
-        logging.error(f"Error getting active connections: {str(e)}")
-        return jsonify({'error': 'Failed to get active connections'}), 500
+        }
 
 
-@app.route('/api/connections/monitor', methods=['POST'])
-def api_monitor_connections():
-    """Manually trigger connection monitoring"""
-    try:
-        monitor_connections()
-        return jsonify({'message': 'Connection monitoring completed'}), 200
-    except Exception as e:
-        logging.error(f"Error monitoring connections: {str(e)}")
-        return jsonify({'error': 'Failed to monitor connections'}), 500
+@ns_connections.route('/monitor')
+class ConnectionMonitor(Resource):
+    @ns_connections.doc('monitor_connections')
+    @ns_connections.response(200, 'Monitoring completed')
+    def post(self):
+        '''Manually trigger connection monitoring'''
+        try:
+            monitor_connections()
+            return {'message': 'Connection monitoring completed'}, 200
+        except Exception as e:
+            logging.error(f"Error monitoring connections: {str(e)}")
+            api.abort(500, 'Failed to monitor connections')
 
 
-@app.route('/api/connections/stats', methods=['GET'])
-def api_get_connection_stats():
-    """Get connection statistics"""
-    try:
+@ns_connections.route('/stats')
+class ConnectionStats(Resource):
+    @ns_connections.doc('get_connection_stats')
+    def get(self):
+        '''Get connection statistics'''
         total_connections = len([c for c in connection_history if c['event'] == 'connect'])
         total_disconnections = len([c for c in connection_history if c['event'] == 'disconnect'])
         
-        # Count by interface
         wlan_connections = len([c for c in connection_history if c['event'] == 'connect' and c['interface'] == 'wlan0'])
         eth_connections = len([c for c in connection_history if c['event'] == 'connect' and c['interface'] == 'eth0'])
         
-        # Unique devices
         unique_macs = len(set(c['mac'] for c in connection_history))
-        
-        # Currently active
         active = get_active_connections()
         
-        return jsonify({
+        return {
             'total_connections': total_connections,
             'total_disconnections': total_disconnections,
             'wireless_connections': wlan_connections,
@@ -655,17 +722,7 @@ def api_get_connection_stats():
             'unique_devices': unique_macs,
             'currently_active': len(active),
             'active_devices': active
-        })
-    except Exception as e:
-        logging.error(f"Error getting connection stats: {str(e)}")
-        return jsonify({'error': 'Failed to get statistics'}), 500
-
-def api_get_ap_status():
-    """Get access point status"""
-    status = get_ap_status()
-    return jsonify(status)
-
-
+        }
 
 @app.route('/', methods=['GET', 'POST'])
 def dashboard():
