@@ -342,346 +342,414 @@ def dashboard():
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DHCP/DNS Dashboard</title>
     <style>
+        :root {
+            --bg-color: #eef2f6;
+            --card-bg: #ffffff;
+            --primary: #343f48;
+            --accent: #ffd700;
+            --text-color: #2b3947;
+            --danger: #f44336;
+            --danger-hover: #d32f2f;
+            --radius: 18px;
+            --shadow: 0 18px 30px rgba(23, 43, 77, 0.1);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
         html, body {
             height: 100%;
-            margin: 0;
-            padding: 0;
-            font-family: Arial, sans-serif;
         }
+
+        body {
+            margin: 0;
+            font-family: 'Segoe UI', Roboto, Arial, sans-serif;
+            background: var(--bg-color);
+            color: var(--text-color);
+            display: flex;
+        }
+
+        a {
+            color: inherit;
+        }
+
         .page-container {
+            flex: 1;
             display: flex;
             flex-direction: column;
             min-height: 100vh;
         }
+
         .content-wrap {
-            flex: 1 0 auto;
-            padding: 20px;
-        }
-        body { font-family: Arial, sans-serif; }
-        input[type="text"] { width: 200px; margin-bottom: 10px; }
-        .flash { padding: 10px; background-color: #f0f0f0; margin-bottom: 20px; white-space: pre-wrap; }
-        .danger { background-color: #ffdddd; color: #f44336; }
-        .form-container {
-            background-color: #f2f2f2;
-            padding: 2rem;
-            border-radius: 8px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            width: 300px;
-        }
-        h2 { color: #333; margin-bottom: 1.5rem; }
-        form { display: flex; flex-direction: column; }
-        label { margin-bottom: 0.5rem; color: #555; }
-        input[type="text"] {
-            padding: 0.5rem;
-            margin-bottom: 1rem;
-            border: 1px solid #ddd;
-            border-radius: 14px;
-        }
-        input[type="submit"] {
-            background-color:#343f48;
-            color: #ffd700;
-            padding: 0.75rem;
-            border: none;
-            border-radius: 10px;
-            cursor: pointer;
-            font-size: 1rem;
-            transition: background-color 0.3s;
-        }
-        input[type="submit"]:hover { background-color: #45a049; }
-        .footer {
-            flex-shrink: 0;
-            background-color: #505e6b;
-            color: #ffffff;
-            text-align: center;
-            padding: 10px;
-            font-size: 20px;
-        }
-        
-        .form-container-wrapper {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-            gap: 20px;
-            width: 100%;
-            margin-left: 0;
-        }
-
-        .form-container {
-            flex: 1; /* Makes both containers take up equal width */
-            width: auto;
-            background-color: #f2f2f2;
-            padding: 2rem;
-            border-radius: 8px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        }
-        input[type="text"], input[type="password"] {
-            width: 100%;
-            box-sizing: border-box;
-        }
-        .form-container input[type="text"],
-        .form-container input[type="password"],
-        .form-container input[type="submit"] {
-            width: 100%;
-            padding: 0.5rem;
-            margin-bottom: 1rem;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            box-sizing: border-box;
-        }
-
-        @media (max-width: 650px) {
-            .dhcp-hosts, .form-container-wrapper {
-                grid-template-columns: 1fr;
-            }
-            
-            .host-card, .form-container {
-                max-width: none;
-                width: 100%;
-            }
-        }
-            .responsive-table {
-        width: 100%;
-        margin-bottom: 20px;
-        overflow-x: auto;
-        }
-        .action-buttons {
+            flex: 1;
+            width: min(1120px, 100%);
+            margin: 0 auto;
+            padding: clamp(20px, 4vw, 48px) clamp(16px, 6vw, 56px) clamp(60px, 8vw, 84px);
             display: flex;
-            gap: 5px;
+            flex-direction: column;
+            gap: clamp(24px, 4vw, 40px);
         }
-        .action-buttons input[type="submit"] {
-            padding: 5px 10px;
-            font-size: 0.9em;
+
+        h1 {
+            margin: 0;
+            font-size: clamp(1.8rem, 1.4rem + 2vw, 3rem);
+            text-align: center;
+            color: var(--primary);
+            letter-spacing: 0.5px;
         }
-        
-        @media screen and (max-width: 600px) {
-            .responsive-table {
-                overflow-x: scroll;
-            }
-            th, td {
-                padding: 8px;
-            }
-            .action-buttons {
-                flex-direction: column;
-            }
+
+        h2 {
+            margin: 0;
+            font-size: clamp(1.3rem, 1.1rem + 1vw, 2rem);
+            color: var(--primary);
         }
-        
-        .dhcp-hosts, .form-container-wrapper {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+
+        h3 {
+            margin: 0;
+            font-size: 1.2rem;
+            color: var(--primary);
+        }
+
+        .flash-stack {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin-top: clamp(12px, 3vw, 18px);
+        }
+
+        .flash {
+            background: #fff6d1;
+            border-left: 5px solid var(--accent);
+            padding: 14px 18px;
+            border-radius: 12px;
+            box-shadow: 0 10px 25px rgba(52, 63, 72, 0.08);
+            white-space: pre-wrap;
+            font-size: 0.95rem;
+        }
+
+        .section {
+            background: var(--card-bg);
+            border-radius: var(--radius);
+            padding: clamp(20px, 3vw, 32px);
+            box-shadow: var(--shadow);
+            display: flex;
+            flex-direction: column;
             gap: 20px;
-            width: 100%;
-            margin-bottom: 30px;
         }
-    
-            .host-card, .form-container {
-            background-color: #f2f2f2;
-            border-radius: 8px;
-            padding: 20px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            width: 100%;
-            box-sizing: border-box;
+
+        .section > p {
+            margin: 0;
         }
-    
-    .host-card h3 {
-        margin-top: 0;
-        color: #343f48;
-        border-bottom: 2px solid #ffd700;
-        padding-bottom: 10px;
-        margin-bottom: 15px;
-    }
-    
-    .host-info {
-        margin-bottom: 20px;
-    }
-    
-    .host-info strong {
-        color: #343f48;
-    }
-    
+
+        .host-grid {
+            display: grid;
+            gap: 20px;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        }
+
+        .host-card {
+            background: linear-gradient(160deg, #ffffff 0%, #f7f9fc 100%);
+            border-radius: var(--radius);
+            padding: 22px;
+            box-shadow: inset 0 0 0 1px rgba(52, 63, 72, 0.08);
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .host-card h3 {
+            border-bottom: 2px solid rgba(255, 215, 0, 0.45);
+            padding-bottom: 12px;
+        }
+
+        .host-info p {
+            margin: 6px 0;
+            font-size: 0.98rem;
+        }
+
+        .host-info strong {
+            color: var(--primary);
+        }
+
+        .empty-state {
+            padding: 18px;
+            background: rgba(52, 63, 72, 0.05);
+            border-radius: 14px;
+            font-size: 1rem;
+        }
+
         .host-actions {
             display: flex;
-            justify-content: space-between;
-            gap: 10px;
-            margin-top: 15px;
+            flex-wrap: wrap;
+            gap: 12px;
         }
-        
+
         .host-actions form {
-            flex: 1;
+            flex: 1 1 130px;
         }
-        
-        .host-actions input[type="submit"] {
-            width: 100%;
-            padding: 10px 15px;
+
+        .forms-grid {
+            display: grid;
+            gap: 24px;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        }
+
+        .form-card {
+            background: linear-gradient(150deg, rgba(255, 255, 255, 0.95) 0%, rgba(239, 244, 249, 0.95) 100%);
+            border-radius: var(--radius);
+            padding: 24px;
+            box-shadow: inset 0 0 0 1px rgba(52, 63, 72, 0.06);
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+        }
+
+        .form-card form {
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+
+        label {
+            font-weight: 600;
+            color: var(--primary);
+            font-size: 0.95rem;
+        }
+
+        input[type="text"],
+        input[type="password"] {
+            padding: 12px 14px;
+            border-radius: 12px;
+            border: 1px solid rgba(52, 63, 72, 0.2);
+            font-size: 1rem;
+            transition: border 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        input[type="text"]:focus,
+        input[type="password"]:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(52, 63, 72, 0.15);
+        }
+
+        button,
+        input[type="submit"] {
+            background: var(--primary);
+            color: var(--accent);
             border: none;
-            border-radius: 10px;
-            font-size: 16px;
-            font-weight: bold;
+            border-radius: 999px;
+            padding: 12px 20px;
+            font-size: 0.95rem;
+            font-weight: 600;
             cursor: pointer;
-            transition: background-color 0.3s ease;
+            transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease, color 0.2s ease;
+            width: 100%;
         }
-        
-        .host-actions input[type="submit"]:hover {
-            opacity: 0.9;
+
+        button:hover,
+        input[type="submit"]:hover {
+            background: #212a32;
+            color: #fff7bf;
+            transform: translateY(-1px);
+            box-shadow: 0 14px 24px rgba(33, 42, 50, 0.18);
         }
-        
-        .edit-button {
-            background-color: #343f48;
-            color: #ffd700;
+
+        .danger {
+            background: var(--danger);
+            color: #fff;
         }
-        
-        .remove-button {
-            background-color: #e74c3c;
-            color: white;
+
+        .danger:hover {
+            background: var(--danger-hover);
+            color: #fff;
         }
-        
-        .host-actions input[type="submit"].remove-button:hover {
-            background-color: #ff0000;
-            color: yellow;
+
+        .management-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 14px;
         }
-    
-    .host-actions input[type="submit"]:hover {
-            background-color: #45a049;
-    
-    @media screen and (max-width: 600px) {
-        .dhcp-hosts {
-            grid-template-columns: 1fr;
+
+        .management-buttons form {
+            flex: 1 1 220px;
         }
-    }
-    
-    /* Mobile dns management */
-            .management-buttons {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-                gap: 15px;
-                max-width: 800px;
-                margin: 20px auto;
+
+        footer {
+            background: var(--primary);
+            color: #fff;
+            text-align: center;
+            padding: 18px 16px;
+            font-size: 0.95rem;
+        }
+
+        @media (max-width: 900px) {
+            .content-wrap {
+                padding: clamp(20px, 4vw, 32px);
             }
-            
-            .management-buttons button {
+        }
+
+        @media (max-width: 640px) {
+            .host-actions {
+                flex-direction: column;
+            }
+
+            .host-actions form {
+                flex: 1 1 auto;
+            }
+
+            button,
+            input[type="submit"] {
                 width: 100%;
-                padding: 10px 15px;
-                background-color: #343f48;
-                color: #ffd700;
-                border: none;
-                border-radius: 10px;
-                font-size: 16px;
-                font-weight: bold;
-                cursor: pointer;
-                transition: background-color 0.3s ease;
             }
-            
-            .management-buttons button:hover {
-                background-color: #45a049;
-                color: yellow;
+
+            .forms-grid {
+                grid-template-columns: 1fr;
             }
-            
-            @media (max-width: 600px) {
-                .management-buttons {
-                    grid-template-columns: 1fr;
-                }
+
+            .management-buttons form {
+                flex: 1 1 100%;
             }
-    
+        }
+
+        @media (max-width: 420px) {
+            .section {
+                padding: 18px;
+            }
+
+            .host-card,
+            .form-card {
+                padding: 20px;
+            }
+        }
     </style>
 </head>
 <body>
     <div class="page-container">
         <div class="content-wrap">
-            <h1>DHCP/DNS Dashboard</h1>
-            {% with messages = get_flashed_messages() %}
-                {% if messages %}
-                    {% for message in messages %}
-                        <div class="flash">{{ message }}</div>
-                    {% endfor %}
-                {% endif %}
-            {% endwith %}
-            
-            <h2>Current DHCP Hosts</h2>
-            <div class="dhcp-hosts">
-                {% for mac, hostname, ip in hosts %}
-                <div class="host-card">
-                    <h3>{{ hostname }}</h3>
-                    <div class="host-info">
-                        <p><strong>MAC Address:</strong> {{ mac }}</p>
-                        <p><strong>IP Address:</strong> {{ ip if ip else 'Dynamic' }}</p>
+            <header>
+                <h1>DHCP/DNS Dashboard</h1>
+                {% with messages = get_flashed_messages() %}
+                    {% if messages %}
+                        <div class="flash-stack">
+                            {% for message in messages %}
+                                <div class="flash">{{ message }}</div>
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+                {% endwith %}
+            </header>
+
+            <section class="section">
+                <h2>Current DHCP Hosts</h2>
+                {% if hosts %}
+                    <div class="host-grid">
+                        {% for mac, hostname, ip in hosts %}
+                        <div class="host-card">
+                            <h3>{{ hostname }}</h3>
+                            <div class="host-info">
+                                <p><strong>MAC Address:</strong> {{ mac }}</p>
+                                <p><strong>IP Address:</strong> {{ ip if ip else 'Dynamic' }}</p>
+                            </div>
+                            <div class="host-actions">
+                                <form method="get" action="{{ url_for('edit_host') }}">
+                                    <input type="hidden" name="mac" value="{{ mac }}" />
+                                    <input type="submit" value="Edit" />
+                                </form>
+                                <form onsubmit="return confirmRemove('{{ hostname }}')" method="post" action="{{ url_for('remove_host') }}">
+                                    <input type="hidden" name="mac" value="{{ mac }}" />
+                                    <input type="submit" value="Remove" />
+                                </form>
+                            </div>
+                        </div>
+                        {% endfor %}
                     </div>
-                    <div class="host-actions">
-                    <form method="get" action="{{ url_for('edit_host') }}">
-                        <input type="hidden" name="mac" value="{{ mac }}" />
-                        <input type="submit" value="Edit" class="edit-button" />
-                    </form>
-                    <form onsubmit="return confirmRemove('{{ hostname }}')" method="post" action="{{ url_for('remove_host') }}">
-                        <input type="hidden" name="mac" value="{{ mac }}" />
-                        <input type="submit" value="Remove" class="remove-button" />
-                    </form>
+                {% else %}
+                    <p class="empty-state">No DHCP host entries found. Add a host below to get started.</p>
+                {% endif %}
+            </section>
+
+            <section class="section">
+                <h2>Network Configuration</h2>
+                <div class="forms-grid">
+                    <div class="form-card">
+                        <h3>Add New Host</h3>
+                        <form method="post">
+                            <input type="hidden" name="action" value="add" />
+                            <label for="mac">MAC Address</label>
+                            <input type="text" id="mac" name="mac" required />
+
+                            <label for="hostname">Hostname</label>
+                            <input type="text" id="hostname" name="hostname" required />
+
+                            <label for="ip">IP Address (optional)</label>
+                            <input type="text" id="ip" name="ip" />
+
+                            <input type="submit" value="Add Host" />
+                        </form>
+                    </div>
+
+                    <div class="form-card">
+                        <h3>Wi-Fi Configuration</h3>
+                        <form method="post">
+                            <input type="hidden" name="action" value="wifi">
+                            <label for="ssid">Wi-Fi SSID</label>
+                            <input type="text" id="ssid" name="ssid" required>
+
+                            <label for="password">Wi-Fi Password</label>
+                            <input type="password" id="password" name="password" required>
+
+                            <input type="submit" value="Update Wi-Fi Settings">
+                        </form>
+                    </div>
                 </div>
-                </div>
-                {% endfor %}
-            </div>
-            <br>
-            <div class="form-container-wrapper">
-                <div class="form-container">
-                    <h2>Add New Host</h2>
+            </section>
+
+            <section class="section">
+                <h2>DNSMASQ Management</h2>
+                <div class="management-buttons">
                     <form method="post">
-                        <input type="hidden" name="action" value="add" />
-                        <label for="mac">MAC Address:</label>
-                        <input type="text" id="mac" name="mac" required />
-                        <label for="hostname">Hostname:</label>
-                        <input type="text" id="hostname" name="hostname" required />
-                        <label for="ip">IP Address (optional):</label>
-                        <input type="text" id="ip" name="ip" />
-                        <input type="submit" value="Add Host" />
+                        <input type="hidden" name="action" value="restart" />
+                        <input type="submit" value="Restart DNSMASQ" />
                     </form>
-                </div>
-                
-                <div class="form-container">
-                    <h2>Wi-Fi Configuration</h2>
                     <form method="post">
-                        <input type="hidden" name="action" value="wifi">
-                        <label for="ssid">Wi-Fi SSID:</label>
-                        <input type="text" id="ssid" name="ssid" required>
-                        <label for="password">Wi-Fi Password:</label>
-                        <input type="password" id="password" name="password" required>
-                        <input type="submit" value="Update Wi-Fi Settings">
+                        <input type="hidden" name="action" value="backup" />
+                        <input type="submit" value="Backup Configuration" />
+                    </form>
+                    <form method="post">
+                        <input type="hidden" name="action" value="status" />
+                        <input type="submit" value="Check DNSMASQ Status" />
                     </form>
                 </div>
-            </div>
-            
-            <h2>DNSMASQ Management</h2>
-            <form method="post" style="display: inline;">
-                <input type="hidden" name="action" value="restart" />
-                <input type="submit" value="Restart DNSMASQ" />
-            </form>
-            <form method="post" style="display: inline; margin-left: 10px;">
-                <input type="hidden" name="action" value="backup" />
-                <input type="submit" value="Backup Configuration" />
-            </form>
-            <form method="post" style="display: inline; margin-left: 10px;">
-                <input type="hidden" name="action" value="status" />
-                <input type="submit" value="Check DNSMASQ Status" />
-            </form>
-                                              
-            <h2>System Management</h2>
-            <form method="post" style="display: inline;">
-                <input type="hidden" name="action" value="shutdown" />
-                <input type="submit" value="Shutdown Raspberry Pi" class="danger" />
-            </form>
+            </section>
+
+            <section class="section">
+                <h2>System Management</h2>
+                <div class="management-buttons">
+                    <form method="post">
+                        <input type="hidden" name="action" value="shutdown" />
+                        <input type="submit" value="Shutdown Raspberry Pi" class="danger" />
+                    </form>
+                </div>
+            </section>
         </div>
-        
+
         <footer class="footer">
             <p>&copy; <span id="current-year"></span> JPHsystems. All rights reserved.</p>
         </footer>
-
-        <script>
-            document.getElementById('current-year').textContent = new Date().getFullYear();
-                                  
-            function confirmRemove(hostname) {
-                return confirm(`Are you sure you want to remove the host "${hostname}"?`);
-            }
-
-        </script>
     </div>
+
+    <script>
+        document.getElementById('current-year').textContent = new Date().getFullYear();
+
+        function confirmRemove(hostname) {
+            return confirm(`Are you sure you want to remove the host "${hostname}"?`);
+        }
+    </script>
 </body>
 </html>
     ''', hosts=hosts)
+
 
 
 @app.route('/edit', methods=['GET', 'POST'])
