@@ -154,16 +154,43 @@ print_success "File permissions configured"
 echo ""
 
 ################################################################################
-# Stop Conflicting Services
+# Fix Access Point Setup Issues and Conflicts
 ################################################################################
 
-print_status "Stopping services before configuration..."
+print_status "Fixing Access Point setup issues and service conflicts..."
 
-# Stop hostapd and dnsmasq if they're running
+# 1. Unmask hostapd service (common issue)
+print_status "Unmasking hostapd service..."
+systemctl unmask hostapd 2>/dev/null || true
+
+# 2. Stop and disable NetworkManager (conflicts with hostapd)
+if systemctl is-active --quiet NetworkManager; then
+    print_status "Disabling NetworkManager (conflicts with hostapd)..."
+    systemctl stop NetworkManager 2>/dev/null || true
+    systemctl disable NetworkManager 2>/dev/null || true
+    print_success "NetworkManager disabled"
+fi
+
+# 3. Configure wpa_supplicant to avoid wlan0 conflicts
+print_status "Configuring wpa_supplicant to avoid wlan0 conflicts..."
+systemctl stop wpa_supplicant@wlan0 2>/dev/null || true
+systemctl disable wpa_supplicant@wlan0 2>/dev/null || true
+
+# Create wpa_supplicant override to use only wlan1 if it exists
+WPA_SERVICE_DIR="/etc/systemd/system/wpa_supplicant.service.d"
+mkdir -p "$WPA_SERVICE_DIR"
+cat > "$WPA_SERVICE_DIR/override.conf" << 'EOF'
+[Service]
+ExecStart=
+ExecStart=/sbin/wpa_supplicant -u -s -c /etc/wpa_supplicant/wpa_supplicant.conf -i wlan1
+EOF
+
+# 4. Stop conflicting services
+print_status "Stopping services before configuration..."
 systemctl stop hostapd 2>/dev/null || true
 systemctl stop dnsmasq 2>/dev/null || true
 
-print_success "Services stopped"
+print_success "Access Point conflicts resolved"
 echo ""
 
 ################################################################################
@@ -178,15 +205,29 @@ if [ -f "/etc/dnsmasq.conf" ]; then
     cp /etc/dnsmasq.conf "$BACKUP_FILE"
     print_success "Backed up existing config to: $BACKUP_FILE"
     
-    # Remove all dhcp-host= lines to start fresh
-    sed -i '/^dhcp-host=/d' /etc/dnsmasq.conf
+    # Count current dhcp-host entries (improved pattern matching)
+    CURRENT_COUNT=$(grep -c -E "dhcp-host=" /etc/dnsmasq.conf 2>/dev/null || echo "0")
+    CURRENT_COUNT=$(echo "$CURRENT_COUNT" | tr -d '\n\r' | head -1)
     
-    # Verify cleanup
-    DHCP_HOSTS=$(grep -c "^dhcp-host=" /etc/dnsmasq.conf || echo "0")
-    if [ "$DHCP_HOSTS" -eq 0 ]; then
-        print_success "Removed all existing DHCP host entries - starting with empty list"
+    if [ "$CURRENT_COUNT" -gt 0 ]; then
+        print_status "Found $CURRENT_COUNT DHCP host entries to remove"
+        
+        # Remove ALL lines containing dhcp-host= (comprehensive cleanup)
+        sed -i '/dhcp-host=/d' /etc/dnsmasq.conf
+        
+        # Verify cleanup with improved pattern matching
+        REMAINING=$(grep -c -E "dhcp-host=" /etc/dnsmasq.conf 2>/dev/null || echo "0")
+        REMAINING=$(echo "$REMAINING" | tr -d '\n\r' | head -1)
+        
+        if [ "$REMAINING" -eq 0 ]; then
+            print_success "Successfully removed all $CURRENT_COUNT DHCP host entries"
+        else
+            print_warning "Found $REMAINING remaining dhcp-host entries"
+            # Show remaining entries for debugging
+            grep -n "dhcp-host=" /etc/dnsmasq.conf 2>/dev/null || true
+        fi
     else
-        print_warning "Found $DHCP_HOSTS remaining dhcp-host entries (this shouldn't happen)"
+        print_success "No DHCP host entries found - starting clean"
     fi
     
     # Restart dnsmasq to apply clean configuration
@@ -284,6 +325,9 @@ ALL ALL=(ALL) NOPASSWD: /sbin/sysctl *
 
 # Allow shutdown
 ALL ALL=(ALL) NOPASSWD: /sbin/shutdown *
+
+# Allow AP state manager
+ALL ALL=(ALL) NOPASSWD: /usr/local/bin/ap-manager.sh *
 EOF
 
 # Set proper permissions on sudoers file
@@ -298,6 +342,143 @@ else
     exit 1
 fi
 
+echo ""
+
+################################################################################
+# Setup Access Point State Persistence System
+################################################################################
+
+print_status "Setting up Access Point state persistence system..."
+
+# Create AP state directory
+AP_STATE_DIR="/var/lib/dhcp-dashboard"
+AP_STATE_FILE="$AP_STATE_DIR/ap_state"
+mkdir -p "$AP_STATE_DIR"
+
+# Create AP state management script
+AP_MANAGER_SCRIPT="/usr/local/bin/ap-manager.sh"
+cat > "$AP_MANAGER_SCRIPT" << 'EOF'
+#!/bin/bash
+
+# Access Point State Manager
+STATE_FILE="/var/lib/dhcp-dashboard/ap_state"
+LOG_FILE="/var/log/ap-manager.log"
+
+log_message() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a "$LOG_FILE"
+}
+
+case "$1" in
+    "start")
+        if [ -f "$STATE_FILE" ]; then
+            AP_STATE=$(cat "$STATE_FILE")
+            log_message "Found saved AP state: $AP_STATE"
+            
+            if [ "$AP_STATE" = "enabled" ]; then
+                log_message "Starting Access Point services..."
+                systemctl start dnsmasq
+                sleep 2
+                systemctl start hostapd
+                sleep 2
+                
+                if systemctl is-active --quiet hostapd && systemctl is-active --quiet dnsmasq; then
+                    log_message "Access Point started successfully"
+                else
+                    log_message "ERROR: Failed to start Access Point"
+                fi
+            else
+                log_message "AP state is disabled - not starting"
+                systemctl stop hostapd 2>/dev/null || true
+                systemctl stop dnsmasq 2>/dev/null || true
+            fi
+        else
+            log_message "No saved AP state found - defaulting to disabled"
+            echo "disabled" > "$STATE_FILE"
+        fi
+        ;;
+    "enable")
+        log_message "Enabling Access Point..."
+        echo "enabled" > "$STATE_FILE"
+        systemctl unmask hostapd
+        systemctl enable hostapd
+        systemctl enable dnsmasq
+        systemctl start dnsmasq
+        sleep 2
+        systemctl start hostapd
+        log_message "Access Point enabled and started"
+        ;;
+    "disable")
+        log_message "Disabling Access Point..."
+        echo "disabled" > "$STATE_FILE"
+        systemctl stop hostapd
+        systemctl stop dnsmasq
+        systemctl disable hostapd
+        log_message "Access Point disabled and stopped"
+        ;;
+    "status")
+        if [ -f "$STATE_FILE" ]; then
+            cat "$STATE_FILE"
+        else
+            echo "disabled"
+        fi
+        ;;
+    *)
+        echo "Usage: $0 {start|enable|disable|status}"
+        exit 1
+        ;;
+esac
+EOF
+
+chmod +x "$AP_MANAGER_SCRIPT"
+
+# Create systemd service for AP state management
+AP_SERVICE_FILE="/etc/systemd/system/ap-state-manager.service"
+cat > "$AP_SERVICE_FILE" << EOF
+[Unit]
+Description=Access Point State Manager
+After=multi-user.target
+Wants=network.target
+
+[Service]
+Type=oneshot
+ExecStart=$AP_MANAGER_SCRIPT start
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Enable the AP state manager service
+systemctl daemon-reload
+systemctl enable ap-state-manager.service
+
+# Set initial state as disabled
+echo "disabled" > "$AP_STATE_FILE"
+
+print_success "Access Point state persistence system configured"
+echo ""
+
+################################################################################
+# Configure Default hostapd Configuration
+################################################################################
+
+print_status "Setting up default hostapd configuration..."
+
+# Update /etc/default/hostapd
+HOSTAPD_DEFAULT="/etc/default/hostapd"
+if [ -f "$HOSTAPD_DEFAULT" ]; then
+    if grep -q "^DAEMON_CONF=" "$HOSTAPD_DEFAULT"; then
+        sed -i 's|^DAEMON_CONF=.*|DAEMON_CONF="/etc/hostapd/hostapd.conf"|' "$HOSTAPD_DEFAULT"
+    else
+        echo 'DAEMON_CONF="/etc/hostapd/hostapd.conf"' >> "$HOSTAPD_DEFAULT"
+    fi
+else
+    echo 'DAEMON_CONF="/etc/hostapd/hostapd.conf"' > "$HOSTAPD_DEFAULT"
+fi
+
+print_success "hostapd default configuration updated"
 echo ""
 
 ################################################################################

@@ -242,9 +242,13 @@ cd dhcp_dashboard
 sudo bash setup_pi.sh
 ```
 
-**The setup script will:**
+**The enhanced setup script will:**
 - ✅ Install all required packages (dnsmasq, hostapd, python3-pip)
 - ✅ Install Python dependencies from requirements.txt
+- ✅ **Fix Access Point setup issues** (unmask hostapd, resolve conflicts)
+- ✅ **Clean existing DHCP hosts** with improved pattern matching
+- ✅ **Setup AP state persistence** across reboots
+- ✅ **Resolve service conflicts** (NetworkManager, wpa_supplicant)
 - ✅ Create systemd service for auto-start on boot
 - ✅ Configure sudo permissions for system commands
 - ✅ Start the application automatically
@@ -302,6 +306,91 @@ sudo systemctl disable dhcp-dashboard
 # Re-enable auto-start on boot
 sudo systemctl enable dhcp-dashboard
 ```
+
+### 🔧 Enhanced Setup Features
+
+The setup script has been enhanced with automatic fixes for common issues:
+
+#### 🚫 **Automatic Issue Resolution**
+
+**Access Point Setup Issues:**
+- ✅ **Hostapd Service Masking** - Automatically unmasks hostapd service
+- ✅ **NetworkManager Conflicts** - Stops and disables NetworkManager
+- ✅ **wpa_supplicant Conflicts** - Configures to avoid wlan0 interference
+- ✅ **Default Configuration** - Sets up proper hostapd defaults
+
+**DHCP Host Cleanup:**
+- ✅ **Improved Pattern Matching** - Finds all dhcp-host entries regardless of format
+- ✅ **Comprehensive Cleanup** - Removes ANY line containing "dhcp-host="
+- ✅ **Better Error Handling** - Fixed "integer expression expected" errors
+- ✅ **Debug Output** - Shows exactly what's being cleaned
+
+**State Persistence:**
+- ✅ **AP State Memory** - Remembers if AP was enabled/disabled across reboots
+- ✅ **Boot-time Management** - Automatically starts/stops AP based on saved state
+- ✅ **State Manager Script** - `/usr/local/bin/ap-manager.sh` for manual control
+- ✅ **Dashboard Integration** - Web interface controls permanent state
+
+#### 🛠️ **Diagnostic & Fix Scripts**
+
+If you encounter issues, additional diagnostic scripts are available:
+
+```bash
+# Diagnose AP setup issues
+sudo bash diagnose_ap_setup.sh
+
+# Diagnose DHCP host storage
+sudo bash diagnose_dhcp_hosts.sh
+
+# Fix Wi-Fi client setup (wlan1) issues
+sudo bash fix_wifi_client_setup.sh
+
+# Fix AP persistence issues
+sudo bash fix_ap_persistence.sh
+
+# Clean up DHCP hosts manually
+sudo bash cleanup_dhcp_hosts.sh
+```
+
+#### 📡 **Access Point State Management**
+
+The system now includes persistent AP state management:
+
+**Manual AP Control:**
+```bash
+# Enable AP (remembers across reboots)
+sudo /usr/local/bin/ap-manager.sh enable
+
+# Disable AP (remembers across reboots)
+sudo /usr/local/bin/ap-manager.sh disable
+
+# Check current state
+sudo /usr/local/bin/ap-manager.sh status
+```
+
+**How it works:**
+- 🔄 **State File**: `/var/lib/dhcp-dashboard/ap_state` stores "enabled" or "disabled"
+- 🚀 **Boot Service**: `ap-state-manager.service` runs on every boot
+- 🎯 **Smart Logic**: Only starts AP if previously enabled, keeps disabled if previously disabled
+- 🖥️ **Dashboard Sync**: Web interface changes are permanent
+
+#### 🌐 **Network Setup Options**
+
+The enhanced setup handles different network configurations:
+
+**Option 1: Dual Wi-Fi (Recommended)**
+- wlan0 = Access Point
+- wlan1 = Wi-Fi Client (requires USB adapter)
+- Full internet sharing capability
+
+**Option 2: Ethernet + Wi-Fi AP**
+- wlan0 = Access Point
+- eth0 = Internet via Ethernet
+- Internet sharing through wired connection
+
+**Option 3: Single Wi-Fi**
+- wlan0 = Either AP OR client mode
+- Isolated network or client-only setup
 
 ---
 
