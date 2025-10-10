@@ -38,10 +38,15 @@ if [ ! -f "$DNSMASQ_CONF" ]; then
     exit 1
 fi
 
-# Count current dhcp-host entries
-CURRENT_COUNT=$(grep -c "^dhcp-host=" "$DNSMASQ_CONF" 2>/dev/null || echo "0")
+# Count current dhcp-host entries (including those with leading whitespace)
+CURRENT_COUNT=$(grep -c -E "^\s*dhcp-host=" "$DNSMASQ_CONF" 2>/dev/null || echo "0")
 CURRENT_COUNT=$(echo "$CURRENT_COUNT" | tr -d '\n\r' | head -1)
 print_status "Current DHCP host entries: $CURRENT_COUNT"
+
+# Show what entries we found for debugging
+print_status "Found these dhcp-host entries:"
+grep -n -E "^\s*dhcp-host=" "$DNSMASQ_CONF" 2>/dev/null || echo "  (none found)"
+echo ""
 
 if [ "$CURRENT_COUNT" -eq 0 ]; then
     print_success "No DHCP host entries to remove - already clean!"
@@ -57,13 +62,20 @@ print_success "Created backup: $BACKUP_FILE"
 print_status "Stopping dnsmasq service..."
 systemctl stop dnsmasq
 
-# Remove all dhcp-host= lines
-print_status "Removing all dhcp-host= entries..."
-sed -i '/^dhcp-host=/d' "$DNSMASQ_CONF"
+# Remove all dhcp-host= lines (more comprehensive approach)
+print_status "Removing all lines containing dhcp-host=..."
+sed -i '/dhcp-host=/d' "$DNSMASQ_CONF"
 
-# Verify removal
-REMAINING=$(grep -c "^dhcp-host=" "$DNSMASQ_CONF" 2>/dev/null || echo "0")
+# Verify removal - check for any remaining dhcp-host entries
+REMAINING=$(grep -c -E "dhcp-host=" "$DNSMASQ_CONF" 2>/dev/null || echo "0")
 REMAINING=$(echo "$REMAINING" | tr -d '\n\r' | head -1)
+
+# Show any remaining entries for debugging
+if [ "$REMAINING" -gt 0 ]; then
+    print_warning "Found $REMAINING remaining dhcp-host entries:"
+    grep -n "dhcp-host=" "$DNSMASQ_CONF" 2>/dev/null
+    echo ""
+fi
 
 if [ "$REMAINING" -eq 0 ]; then
     print_success "Successfully removed all $CURRENT_COUNT DHCP host entries"
