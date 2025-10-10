@@ -197,8 +197,41 @@ def write_dhcp_hosts(hosts):
         with open(DNSMASQ_CONF, 'r') as f:
             content = f.readlines()
 
+        # Remove all existing dhcp-host lines
         new_content = [line for line in content if not line.startswith('dhcp-host=')]
+        
+        # Check for duplicate IPs before writing
+        seen_ips = set()
+        seen_macs = set()
+        seen_hostnames = set()
+        deduplicated_hosts = []
+        
         for mac, hostname, ip in hosts:
+            # Skip if MAC already seen
+            if mac in seen_macs:
+                logging.warning(f"Skipping duplicate MAC address: {mac}")
+                continue
+            
+            # Skip if hostname already seen
+            if hostname in seen_hostnames:
+                logging.warning(f"Skipping duplicate hostname: {hostname}")
+                continue
+            
+            # Skip if IP already seen (and IP is not None/empty)
+            if ip and ip in seen_ips:
+                logging.warning(f"Skipping duplicate IP address: {ip}")
+                continue
+            
+            # Add to tracking sets
+            seen_macs.add(mac)
+            seen_hostnames.add(hostname)
+            if ip:
+                seen_ips.add(ip)
+            
+            deduplicated_hosts.append((mac, hostname, ip))
+        
+        # Write deduplicated hosts
+        for mac, hostname, ip in deduplicated_hosts:
             if ip:
                 new_content.append(f'dhcp-host={mac},{hostname},{ip}\n')
             else:
@@ -207,7 +240,7 @@ def write_dhcp_hosts(hosts):
         with open(DNSMASQ_CONF, 'w') as f:
             f.writelines(new_content)
 
-        logging.info(f"Wrote {len(hosts)} hosts to configuration")
+        logging.info(f"Wrote {len(deduplicated_hosts)} hosts to configuration (removed {len(hosts) - len(deduplicated_hosts)} duplicates)")
     except Exception as e:
         logging.error(f"Error writing DHCP hosts: {str(e)}")
         raise
