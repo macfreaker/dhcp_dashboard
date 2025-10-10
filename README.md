@@ -1,10 +1,35 @@
-# Dashboard for DHCP/DNS on Raspberry PI
+<div align="center">
 
-A Flask web application that provides a comprehensive dashboard for managing DHCP/DNS settings on a Raspberry Pi running dnsmasq. **Now includes Access Point functionality** - transform your Raspberry Pi into a wireless access point with unified local network across Wi-Fi and Ethernet!
+# 🚀 DHCP/DNS Dashboard for Raspberry Pi
 
-## Features
+### _Developed by **JPHsystems**_
 
-### 🌐 Web Dashboard
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.x-blue.svg)](https://www.python.org/)
+[![Flask](https://img.shields.io/badge/flask-3.0-green.svg)](https://flask.palletsprojects.com/)
+[![Platform](https://img.shields.io/badge/platform-Raspberry%20Pi-red.svg)](https://www.raspberrypi.org/)
+
+**A comprehensive Flask web application for managing DHCP/DNS and Access Point functionality on Raspberry Pi**
+
+[Features](#-features) • [Quick Start](#-quick-start) • [API Docs](#-interactive-api-documentation-swagger-ui) • [Installation](#-installation) • [Network Setup](#-network-configuration)
+
+---
+
+</div>
+
+## 📋 Overview
+
+Transform your Raspberry Pi into a powerful **network management hub** with:
+- 📡 **Wireless Access Point** broadcasting your own Wi-Fi network
+- 🔌 **Ethernet connectivity** for wired devices via switch
+- 🌐 **Unified local network** - all devices on same subnet (192.168.4.x)
+- 📊 **Connection tracking** with detailed logging
+- 🖥️ **Web dashboard** for easy management
+- 📚 **Swagger API** for programmatic control
+
+## ✨ Features
+
+### 🖥️ Web Dashboard
 - **DHCP Host Management**
   - Add new hosts with MAC addresses, hostnames, and optional static IP addresses
   - Edit existing host configurations
@@ -32,9 +57,11 @@ A Flask web application that provides a comprehensive dashboard for managing DHC
   - Update Wi-Fi SSID and password through the web interface
   - Automatically reconnect to new networks
 
-- **System Management**
+- **System Management** 🔧
   - Shutdown the Raspberry Pi remotely through the web interface
   - Includes confirmation screen for safety
+
+---
 
 ### 📚 Interactive API Documentation (Swagger UI)
 
@@ -70,7 +97,7 @@ Features:
   curl -X DELETE http://your-ip:8080/api/hosts/00:11:22:33:44:55
   ```
 
-#### Access Point Management
+#### 📡 Access Point Management
 - **Get AP configuration**
   ```bash
   curl http://your-ip:8080/api/ap/config
@@ -98,7 +125,7 @@ Features:
   curl http://your-ip:8080/api/ap/status
   ```
 
-#### Connection Tracking
+#### 📊 Connection Tracking
 - **Get connection history**
 ```bash
 curl http://your-ip:8080/api/connections?limit=50
@@ -119,7 +146,7 @@ curl http://your-ip:8080/api/connections/stats
 curl -X POST http://your-ip:8080/api/connections/monitor
 ```
 
-#### Log Management
+#### 📝 Log Management
 - **View last N lines from log**
   ```bash
   curl http://your-ip:8080/api/logs?lines=10
@@ -134,6 +161,8 @@ curl -X POST http://your-ip:8080/api/connections/monitor
   ```bash
   curl -O http://your-ip:8080/api/logs/download
   ```
+
+---
 
 ### 🛠️ API Testing Tools
 
@@ -177,9 +206,11 @@ The API follows OpenAPI 3.0 standards, accessible at: `http://192.168.4.1:8080/a
    - Understand data structures
    - Copy example JSON for your own tools
 
-## Installation
+---
 
-### Quick Setup (Recommended)
+## 🚀 Quick Start
+
+### ⚡ Automated Setup (Recommended)
 
 Use the automated setup script for complete installation and auto-start configuration:
 
@@ -200,7 +231,7 @@ sudo bash setup_pi.sh
 - ✅ Start the application automatically
 - ✅ Display access URL and service management commands
 
-### Manual Setup
+### 🔧 Manual Setup
 
 If you prefer manual installation:
 
@@ -226,7 +257,7 @@ If you prefer manual installation:
 4. **Access the dashboard:**
    - Open browser: `http://your-raspberry-pi-ip:8080`
 
-### Service Management
+### ⚙️ Service Management
 
 After setup, manage the service with systemd:
 
@@ -253,9 +284,11 @@ sudo systemctl disable dhcp-dashboard
 sudo systemctl enable dhcp-dashboard
 ```
 
-## Network Configuration
+---
 
-### Access Point Mode Setup
+## 🌐 Network Configuration
+
+### 📡 Access Point Mode Setup
 
 When you configure the Access Point through the web interface, the application automatically:
 
@@ -265,7 +298,7 @@ When you configure the Access Point through the web interface, the application a
 4. **Unified network** - Both wireless and wired devices on same subnet
 5. **No internet routing** - Isolated local network for testing/development
 
-### Network Topology
+### 🔗 Network Topology
 
 ```
                     ┌─────────────────────┐
@@ -293,7 +326,9 @@ When you configure the Access Point through the web interface, the application a
 - **Pi IP**: `192.168.4.1` (gateway for local network)
 - **Use Cases**: Network testing, IoT development, isolated lab environments
 
-## Configuration Files
+---
+
+## 📁 Configuration Files
 
 The application manages:
 - `/etc/dnsmasq.conf` - DHCP/DNS configuration (serves both interfaces)
@@ -302,7 +337,9 @@ The application manages:
 - `/etc/wpa_supplicant/wpa_supplicant.conf` - Wi-Fi client settings (when in client mode)
 - `/etc/sysctl.conf` - Network configuration (IP forwarding disabled for local network)
 
-## Requirements
+---
+
+## 📦 Requirements
 
 - Python 3.x
 - Flask
@@ -310,29 +347,33 @@ The application manages:
 - hostapd (Access Point software)
 - sudo privileges for system operations
 
-## Use Cases
+---
 
-### Scenario 1: Isolated Network Lab
+## 💡 Use Cases
+
+### 🧪 Scenario 1: Isolated Network Lab
 Create a completely isolated local network for testing without affecting your main network. Connect devices via Wi-Fi or Ethernet switch.
 
-### Scenario 2: IoT Development Environment
+### 🤖 Scenario 2: IoT Development Environment
 Set up a dedicated network for IoT device testing and development. All devices can communicate with each other on the same subnet.
 
-### Scenario 3: Network Training/Education
+### 🎓 Scenario 3: Network Training/Education
 Perfect for teaching networking concepts (DHCP, DNS, subnetting) in a controlled, isolated environment.
 
-### Scenario 4: Portable Testing Environment
+### 🎒 Scenario 4: Portable Testing Environment
 Bring your Raspberry Pi with a small switch to create an instant network anywhere - no internet required!
 
-### Scenario 5: Security Testing Lab
+### 🛡️ Scenario 5: Security Testing Lab
 Create isolated environments for penetration testing or security research without exposing your main network.
 
-## Logging
+---
 
-### Application Logs
+## 📄 Logging
+
+### 📝 Application Logs
 All operations are logged to `dhcp_dashboard.log` for troubleshooting and audit purposes.
 
-### Connection Tracking
+### 📊 Connection Tracking
 The application automatically tracks all device connections and disconnections:
 - **Connection log**: `connection_log.json` - JSON format with detailed connection history
 - **Information logged**:
@@ -349,13 +390,42 @@ The application automatically tracks all device connections and disconnections:
 - Currently active connections count
 - Real-time refresh capability
 
-## Security Note
+---
+
+## 🔒 Security Note
 
 ⚠️ **Important**: Change the default secret key in `dhcp_dashboard.py` before deploying:
 ```python
 app.secret_key = 'your_secret_key_here'  # Replace with a strong secret key
 ```
 
-## License
+---
+
+## 📜 License
 
 See LICENSE file for details.
+
+---
+
+<div align="center">
+
+## 👨‍💻 Developer
+
+**Developed with ❤️ by [JPHsystems](https://github.com/jphermans)**
+
+### 🌟 If you find this project useful, please give it a star!
+
+---
+
+### 📞 Support & Contact
+
+For issues, questions, or contributions:
+- 🐛 [Report Issues](../../issues)
+- 💬 [Discussions](../../discussions)
+- 📧 Contact: JPHsystems
+
+---
+
+**© 2024 JPHsystems. All rights reserved.**
+
+</div>
