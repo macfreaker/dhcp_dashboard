@@ -67,13 +67,19 @@ print_success "Prerequisites check passed"
 echo ""
 
 ################################################################################
-# System Update
+# System Update and Upgrade
 ################################################################################
 
 print_status "Updating package lists..."
 apt-get update -qq
 
 print_success "Package lists updated"
+echo ""
+
+print_status "Upgrading installed packages (this may take a few minutes)..."
+apt-get upgrade -y
+
+print_success "System packages upgraded"
 echo ""
 
 ################################################################################
