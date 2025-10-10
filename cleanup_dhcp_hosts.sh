@@ -39,7 +39,8 @@ if [ ! -f "$DNSMASQ_CONF" ]; then
 fi
 
 # Count current dhcp-host entries
-CURRENT_COUNT=$(grep -c "^dhcp-host=" "$DNSMASQ_CONF" || echo "0")
+CURRENT_COUNT=$(grep -c "^dhcp-host=" "$DNSMASQ_CONF" 2>/dev/null || echo "0")
+CURRENT_COUNT=$(echo "$CURRENT_COUNT" | tr -d '\n\r' | head -1)
 print_status "Current DHCP host entries: $CURRENT_COUNT"
 
 if [ "$CURRENT_COUNT" -eq 0 ]; then
@@ -61,7 +62,8 @@ print_status "Removing all dhcp-host= entries..."
 sed -i '/^dhcp-host=/d' "$DNSMASQ_CONF"
 
 # Verify removal
-REMAINING=$(grep -c "^dhcp-host=" "$DNSMASQ_CONF" || echo "0")
+REMAINING=$(grep -c "^dhcp-host=" "$DNSMASQ_CONF" 2>/dev/null || echo "0")
+REMAINING=$(echo "$REMAINING" | tr -d '\n\r' | head -1)
 
 if [ "$REMAINING" -eq 0 ]; then
     print_success "Successfully removed all $CURRENT_COUNT DHCP host entries"
