@@ -394,9 +394,60 @@ The application automatically tracks all device connections and disconnections:
 
 ## 🔒 Security Note
 
-⚠️ **Important**: Change the default secret key in `dhcp_dashboard.py` before deploying:
+⚠️ **Important**: Change the default secret key in `dhcp_dashboard.py` before deploying to production!
+
+### How to Generate a Secure Secret Key
+
+**Method 1: Using Python (Recommended)**
+```bash
+python3 -c 'import secrets; print(secrets.token_hex(32))'
+```
+
+**Method 2: Using OpenSSL**
+```bash
+openssl rand -hex 32
+```
+
+**Method 3: Using /dev/urandom**
+```bash
+head -c 32 /dev/urandom | base64
+```
+
+### Update the Secret Key
+
+1. Generate a key using one of the methods above
+2. Open `dhcp_dashboard.py`
+3. Replace the default key:
+
 ```python
-app.secret_key = 'your_secret_key_here'  # Replace with a strong secret key
+# BEFORE (line 13)
+app.secret_key = 'your_secret_key_here'  # Replace with a real secret key
+
+# AFTER (example)
+app.secret_key = 'a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4y5z6'
+```
+
+4. Restart the service:
+```bash
+sudo systemctl restart dhcp-dashboard
+```
+
+**Why is this important?**
+- 🔐 Protects session data and cookies
+- 🛡️ Prevents session hijacking
+- ✅ Essential for production deployments
+- ⚠️ Never commit your secret key to version control!
+
+**Quick Update Example:**
+```bash
+# Generate new key
+NEW_KEY=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
+
+# Update the file (backup first!)
+sudo sed -i.bak "s/your_secret_key_here/$NEW_KEY/" dhcp_dashboard.py
+
+# Restart service
+sudo systemctl restart dhcp-dashboard
 ```
 
 ---
@@ -426,6 +477,6 @@ For issues, questions, or contributions:
 
 ---
 
-**© 2024 JPHsystems. All rights reserved.**
+**© 2025 JPHsystems. All rights reserved.**
 
 </div>
