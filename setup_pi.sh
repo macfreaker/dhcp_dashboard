@@ -454,17 +454,86 @@ EOF
 systemctl daemon-reload
 systemctl enable ap-state-manager.service
 
-# Set initial state as disabled
-echo "disabled" > "$AP_STATE_FILE"
+# Set initial state as enabled (since we just configured AP)
+echo "enabled" > "$AP_STATE_FILE"
 
-print_success "Access Point state persistence system configured"
+# Enable and start the AP services immediately
+print_status "Enabling Access Point services for immediate use..."
+systemctl enable hostapd
+systemctl enable dnsmasq
+
+print_success "Access Point state persistence system configured (enabled by default)"
 echo ""
 
 ################################################################################
-# Configure Default hostapd Configuration
+# Configure Default hostapd Configuration with AP Credentials
 ################################################################################
 
-print_status "Setting up default hostapd configuration..."
+print_status "Setting up hostapd configuration with default AP settings..."
+
+# Create hostapd configuration directory
+mkdir -p /etc/hostapd
+
+# Prompt user for AP credentials or use defaults
+echo ""
+echo -e "${YELLOW}=========================================="
+echo -e "Access Point Configuration"
+echo -e "==========================================${NC}"
+echo ""
+echo -e "${BLUE}You can set up your Access Point credentials now, or press Enter to use defaults.${NC}"
+echo ""
+
+# Get SSID
+read -p "Enter AP Name (SSID) [default: RaspberryPi-AP]: " AP_SSID
+AP_SSID=${AP_SSID:-"RaspberryPi-AP"}
+
+# Get Password
+read -s -p "Enter AP Password (min 8 chars) [default: raspberry123]: " AP_PASSWORD
+echo ""
+AP_PASSWORD=${AP_PASSWORD:-"raspberry123"}
+
+# Validate password length
+while [ ${#AP_PASSWORD} -lt 8 ]; do
+    echo ""
+    print_warning "Password must be at least 8 characters long"
+    read -s -p "Enter AP Password (min 8 chars): " AP_PASSWORD
+    echo ""
+done
+
+echo ""
+print_status "Creating hostapd configuration..."
+print_status "AP Name (SSID): $AP_SSID"
+print_status "AP Password: [hidden - ${#AP_PASSWORD} characters]"
+
+# Create hostapd.conf with user settings
+cat > /etc/hostapd/hostapd.conf << EOF
+# Interface and driver
+interface=wlan0
+driver=nl80211
+
+# Access Point settings
+ssid=$AP_SSID
+hw_mode=g
+channel=7
+wmm_enabled=0
+macaddr_acl=0
+auth_algs=1
+ignore_broadcast_ssid=0
+
+# WPA settings
+wpa=2
+wpa_passphrase=$AP_PASSWORD
+wpa_key_mgmt=WPA-PSK
+wpa_pairwise=TKIP
+rsn_pairwise=CCMP
+
+# Country code (change if needed)
+country_code=US
+ieee80211n=1
+ieee80211d=1
+EOF
+
+print_success "hostapd.conf created with custom settings"
 
 # Update /etc/default/hostapd
 HOSTAPD_DEFAULT="/etc/default/hostapd"
@@ -479,6 +548,73 @@ else
 fi
 
 print_success "hostapd default configuration updated"
+
+# Configure network interfaces for AP
+print_status "Configuring network interfaces for Access Point..."
+
+# Configure dhcpcd for static IP on wlan0
+if ! grep -q "interface wlan0" /etc/dhcpcd.conf; then
+    cat >> /etc/dhcpcd.conf << 'EOF'
+
+# Static IP for Access Point
+interface wlan0
+    static ip_address=192.168.4.1/24
+    nohook wpa_supplicant
+EOF
+    print_success "dhcpcd configured for wlan0 static IP"
+else
+    print_success "dhcpcd already configured for wlan0"
+fi
+
+# Configure dnsmasq for DHCP
+print_status "Configuring DHCP server..."
+DNSMASQ_CONF="/etc/dnsmasq.conf"
+if [ -f "$DNSMASQ_CONF" ]; then
+    # Backup existing config
+    cp "$DNSMASQ_CONF" "${DNSMASQ_CONF}.backup_$(date +%Y%m%d_%H%M%S)"
+fi
+
+# Add AP configuration if not present
+if ! grep -q "interface=wlan0" "$DNSMASQ_CONF" 2>/dev/null; then
+    cat >> "$DNSMASQ_CONF" << 'EOF'
+
+# Access Point Configuration
+interface=wlan0
+dhcp-range=192.168.4.10,192.168.4.50,255.255.255.0,24h
+bind-interfaces
+server=8.8.8.8
+domain-needed
+bogus-priv
+log-dhcp
+EOF
+    print_success "dnsmasq configured for Access Point"
+else
+    print_success "dnsmasq already configured"
+fi
+
+# Enable IP forwarding for internet sharing
+print_status "Enabling IP forwarding for internet sharing..."
+if ! grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf; then
+    echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf
+fi
+sysctl -p > /dev/null 2>&1
+
+# Configure iptables for NAT
+print_status "Setting up NAT routing..."
+iptables -t nat -F POSTROUTING 2>/dev/null || true
+iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+iptables -A FORWARD -i eth0 -o wlan0 -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+iptables -A FORWARD -i wlan0 -o eth0 -j ACCEPT 2>/dev/null || true
+
+# Save iptables rules
+sh -c "iptables-save > /etc/iptables.ipv4.nat" 2>/dev/null
+
+# Add iptables restore to rc.local if not present
+if [ -f /etc/rc.local ] && ! grep -q "iptables-restore" /etc/rc.local; then
+    sed -i 's|^exit 0|iptables-restore < /etc/iptables.ipv4.nat\nexit 0|' /etc/rc.local
+fi
+
+print_success "Network configuration completed"
 echo ""
 
 ################################################################################
@@ -534,21 +670,61 @@ echo -e "  Connection Log:    ${APP_DIR}/connection_log.json"
 echo -e "  DNSMASQ Config:    /etc/dnsmasq.conf"
 echo -e "  Hostapd Config:    /etc/hostapd/hostapd.conf"
 echo ""
+echo -e "${YELLOW}Starting Access Point services...${NC}"
+
+# Start networking services in correct order
+print_status "Restarting networking services..."
+systemctl daemon-reload
+
+# Restart dhcpcd to apply new configuration
+systemctl restart dhcpcd 2>/dev/null || true
+sleep 2
+
+# Start dnsmasq
+systemctl restart dnsmasq
+sleep 2
+
+# Start hostapd
+systemctl restart hostapd
+sleep 3
+
+# Check if AP services started successfully
+AP_RUNNING=false
+if systemctl is-active --quiet hostapd && systemctl is-active --quiet dnsmasq; then
+    print_success "Access Point started successfully!"
+    AP_RUNNING=true
+else
+    print_warning "Access Point services may need manual restart after reboot"
+    print_warning "Use: sudo systemctl restart hostapd && sudo systemctl restart dnsmasq"
+fi
+
+echo ""
 echo -e "${YELLOW}Next Steps:${NC}"
 echo -e "  1. Access the dashboard at: ${BLUE}http://${IP_ADDRESS}:8080${NC}"
-echo -e "  2. Configure your Access Point (SSID, password)"
-echo -e "  3. Start the Access Point from the dashboard"
-echo -e "  4. Connect devices via Wi-Fi or Ethernet switch"
+if [ "$AP_RUNNING" = true ]; then
+    echo -e "  2. ${GREEN}Your Access Point is now running:${NC}"
+    echo -e "     - SSID: ${BLUE}$AP_SSID${NC}"
+    echo -e "     - Password: ${BLUE}[as configured]${NC}"
+    echo -e "     - AP IP: ${BLUE}192.168.4.1${NC}"
+    echo -e "  3. Connect devices to the Wi-Fi network"
+    echo -e "  4. Access dashboard from connected devices at: ${BLUE}http://192.168.4.1:8080${NC}"
+else
+    echo -e "  2. Restart Access Point services if needed"
+    echo -e "  3. Connect devices via Wi-Fi (once AP is running) or Ethernet"
+fi
 echo ""
-print_success "The application will automatically start on every boot!"
+print_success "The application and Access Point will automatically start on every boot!"
 echo ""
 
 ################################################################################
-# Optional: Enable DHCP logging in dnsmasq
+# Final Status Check
 ################################################################################
 
-print_status "Note: DHCP logging will be enabled when you configure the Access Point"
-print_status "through the web interface."
+print_status "Final system status:"
+echo -e "  Dashboard service: $(systemctl is-active dhcp-dashboard || echo 'inactive')"
+echo -e "  Access Point (hostapd): $(systemctl is-active hostapd || echo 'inactive')"
+echo -e "  DHCP Server (dnsmasq): $(systemctl is-active dnsmasq || echo 'inactive')"
+echo -e "  AP Persistence: $(cat /var/lib/dhcp-dashboard/ap_state 2>/dev/null || echo 'unknown')"
 echo ""
 
-print_success "Setup complete! Enjoy your DHCP Dashboard!"
+print_success "Setup complete! Your DHCP Dashboard with Access Point is ready!"
