@@ -682,17 +682,26 @@ echo ""
 read -p "Enter AP Name (SSID) [default: RaspberryPi-AP]: " AP_SSID
 AP_SSID=${AP_SSID:-"RaspberryPi-AP"}
 
-# Get Password
-read -s -p "Enter AP Password (min 8 chars) [default: raspberry123]: " AP_PASSWORD
-echo ""
-AP_PASSWORD=${AP_PASSWORD:-"raspberry123"}
+# Get Password (with confirmation)
+while true; do
+    read -s -p "Enter AP Password (min 8 chars) [default: raspberry123]: " AP_PASSWORD
+    echo ""
+    AP_PASSWORD=${AP_PASSWORD:-"raspberry123"}
 
-# Validate password length
-while [ ${#AP_PASSWORD} -lt 8 ]; do
+    if [ ${#AP_PASSWORD} -lt 8 ]; then
+        print_warning "Password must be at least 8 characters long"
+        continue
+    fi
+
+    # Confirm password
+    read -s -p "Confirm AP Password: " AP_PASSWORD_CONFIRM
     echo ""
-    print_warning "Password must be at least 8 characters long"
-    read -s -p "Enter AP Password (min 8 chars): " AP_PASSWORD
-    echo ""
+
+    if [ "$AP_PASSWORD" = "$AP_PASSWORD_CONFIRM" ]; then
+        break
+    else
+        print_warning "Passwords do not match. Please try again."
+    fi
 done
 
 echo ""

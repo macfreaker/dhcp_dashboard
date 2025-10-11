@@ -95,11 +95,22 @@ def log_connection_event(event_type, mac, ip, hostname=None, interface='unknown'
             'hostname': hostname or 'Unknown',
             'interface': interface  # 'wlan0' or 'eth0'
         }
-        
+
         connection_history.append(event)
         save_connection_history()
-        
-        logging.info(f"Connection Event: {event_type.upper()} - {mac} ({ip}) - {hostname} on {interface}")
+
+        # Enhanced logging with more details
+        event_emoji = "🔌" if event_type == 'connect' else "🔌❌"
+        logging.info(f"{event_emoji} CONNECTION EVENT: {event_type.upper()} - MAC:{mac} IP:{ip} Host:{hostname} Interface:{interface} Time:{timestamp}")
+        logging.info(f"Total connection history: {len(connection_history)} events")
+
+        # Also log to a separate connection log file for easier monitoring
+        try:
+            with open('connection_events.log', 'a') as f:
+                f.write(f"{timestamp} | {event_type.upper()} | {mac} | {ip} | {hostname} | {interface}\n")
+        except Exception as log_e:
+            logging.warning(f"Could not write to connection_events.log: {log_e}")
+
     except Exception as e:
         logging.error(f"Error logging connection event: {str(e)}")
 
