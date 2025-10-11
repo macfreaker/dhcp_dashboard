@@ -442,32 +442,142 @@ echo ""
 
 print_status "Creating systemd service for auto-start on boot..."
 
-# Create the systemd service file
-cat > /etc/systemd/system/${SERVICE_NAME}.service << EOF
+# Create comprehensive systemd service for all components
+cat > /etc/systemd/system/dhcp-dashboard-system.service << EOF
 [Unit]
-Description=DHCP Dashboard Web Application
+Description=DHCP Dashboard System (AP + Web + Internet)
 After=network.target
-Wants=ap-state-manager.service
-After=ap-state-manager.service
+Wants=network.target
 
 [Service]
-Type=simple
+Type=oneshot
+RemainAfterExit=yes
 User=root
 WorkingDirectory=${APP_DIR}
-ExecStart=/usr/bin/python3 ${APP_DIR}/${APP_FILE}
-Restart=always
-RestartSec=10
+ExecStart=/usr/local/bin/start-dashboard-system.sh
+ExecStop=/usr/local/bin/stop-dashboard-system.sh
 StandardOutput=journal
 StandardError=journal
-# Give more time for startup
-TimeoutStartSec=30
-
-# Environment
-Environment="PYTHONUNBUFFERED=1"
+TimeoutStartSec=60
 
 [Install]
 WantedBy=multi-user.target
 EOF
+
+# Create the startup script
+cat > /usr/local/bin/start-dashboard-system.sh << 'EOF'
+#!/bin/bash
+
+echo "Starting DHCP Dashboard System..."
+
+# 1. Prepare wlan0 and start AP
+echo "Starting Access Point..."
+/usr/local/bin/ap-manager.sh start
+
+# Wait for AP to be ready
+sleep 5
+
+# 2. Check if wlan1 should be configured for internet
+if [ -f "/etc/wpa_supplicant/wpa_supplicant-wlan1.conf" ]; then
+    echo "Configuring wlan1 for internet access..."
+    # Set wlan1 to managed mode
+    iw wlan1 set type managed 2>/dev/null || true
+    ip link set wlan1 up 2>/dev/null || true
+
+    # Start wpa_supplicant on wlan1
+    systemctl start wpa_supplicant@wlan1 2>/dev/null || true
+    sleep 3
+
+    # Enable internet sharing if wlan1 gets connected
+    if iwgetid wlan1 -r &>/dev/null; then
+        echo "wlan1 connected, enabling internet sharing..."
+        /usr/local/bin/enable-internet-sharing.sh
+    fi
+fi
+
+# 3. Start the dashboard
+echo "Starting web dashboard..."
+cd /home/pi/dhcp_dashboard
+/usr/bin/python3 dhcp_dashboard.py &
+echo $! > /var/run/dhcp-dashboard.pid
+
+echo "DHCP Dashboard System started successfully"
+EOF
+
+# Create the stop script
+cat > /usr/local/bin/stop-dashboard-system.sh << 'EOF'
+#!/bin/bash
+
+echo "Stopping DHCP Dashboard System..."
+
+# Stop dashboard
+if [ -f "/var/run/dhcp-dashboard.pid" ]; then
+    PID=$(cat /var/run/dhcp-dashboard.pid)
+    kill $PID 2>/dev/null || true
+    rm -f /var/run/dhcp-dashboard.pid
+fi
+
+# Stop AP
+/usr/local/bin/ap-manager.sh disable
+
+# Stop internet sharing
+/usr/local/bin/disable-internet-sharing.sh 2>/dev/null || true
+
+# Stop wlan1 client
+systemctl stop wpa_supplicant@wlan1 2>/dev/null || true
+
+echo "DHCP Dashboard System stopped"
+EOF
+
+# Create internet sharing scripts
+cat > /usr/local/bin/enable-internet-sharing.sh << 'EOF'
+#!/bin/bash
+
+# Enable IP forwarding
+sysctl -w net.ipv4.ip_forward=1
+
+# Clear existing rules
+iptables -t nat -F
+iptables -F FORWARD
+
+# NAT from wlan1 to wlan0/eth0
+iptables -t nat -A POSTROUTING -o wlan1 -j MASQUERADE
+iptables -A FORWARD -i wlan1 -o wlan0 -m state --state RELATED,ESTABLISHED -j ACCEPT
+iptables -A FORWARD -i wlan0 -o wlan1 -j ACCEPT
+iptables -A FORWARD -i wlan1 -o eth0 -m state --state RELATED,ESTABLISHED -j ACCEPT
+iptables -A FORWARD -i eth0 -o wlan1 -j ACCEPT
+
+# Save rules
+iptables-save > /etc/iptables.ipv4.nat
+EOF
+
+cat > /usr/local/bin/disable-internet-sharing.sh << 'EOF'
+#!/bin/bash
+
+# Disable IP forwarding
+sysctl -w net.ipv4.ip_forward=0
+
+# Clear NAT rules
+iptables -t nat -F
+iptables -F FORWARD
+
+# Remove saved rules
+rm -f /etc/iptables.ipv4.nat
+EOF
+
+# Make scripts executable
+chmod +x /usr/local/bin/start-dashboard-system.sh
+chmod +x /usr/local/bin/stop-dashboard-system.sh
+chmod +x /usr/local/bin/enable-internet-sharing.sh
+chmod +x /usr/local/bin/disable-internet-sharing.sh
+
+# Enable the comprehensive service
+systemctl daemon-reload
+systemctl enable dhcp-dashboard-system.service
+
+# Disable individual services to avoid conflicts
+systemctl disable dhcp-dashboard.service 2>/dev/null || true
+systemctl disable ap-state-manager.service 2>/dev/null || true
 
 print_success "Systemd service file created at /etc/systemd/system/${SERVICE_NAME}.service"
 echo ""
