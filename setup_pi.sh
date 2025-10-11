@@ -446,7 +446,9 @@ print_status "Creating systemd service for auto-start on boot..."
 cat > /etc/systemd/system/${SERVICE_NAME}.service << EOF
 [Unit]
 Description=DHCP Dashboard Web Application
-After=network.target dnsmasq.service
+After=network.target
+Wants=ap-state-manager.service
+After=ap-state-manager.service
 
 [Service]
 Type=simple
@@ -457,6 +459,8 @@ Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
+# Give more time for startup
+TimeoutStartSec=30
 
 # Environment
 Environment="PYTHONUNBUFFERED=1"
@@ -563,23 +567,68 @@ log_message() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a "$LOG_FILE"
 }
 
+prepare_wlan0() {
+    log_message "Preparing wlan0 interface for Access Point..."
+
+    # Check if wlan0 exists
+    if ! ip link show wlan0 &>/dev/null; then
+        log_message "ERROR: wlan0 interface not found"
+        return 1
+    fi
+
+    # Unblock RF-kill if needed
+    if command -v rfkill &> /dev/null; then
+        if rfkill list wifi | grep -q "blocked: yes"; then
+            log_message "Unblocking WiFi RF-kill..."
+            rfkill unblock wifi
+            sleep 2
+        fi
+    fi
+
+    # Set regulatory domain
+    iw reg set US 2>/dev/null || log_message "Warning: Could not set regulatory domain"
+
+    # Set interface type and bring up
+    iw wlan0 set type managed 2>/dev/null || log_message "Warning: Could not set interface type"
+    ip link set wlan0 up || log_message "Warning: Could not bring up wlan0"
+
+    # Assign static IP
+    if ! ip addr show wlan0 | grep -q "192.168.4.1"; then
+        ip addr add 192.168.4.1/24 dev wlan0 2>/dev/null || log_message "Warning: Could not assign IP to wlan0"
+    fi
+
+    log_message "wlan0 interface prepared"
+    return 0
+}
+
 case "$1" in
     "start")
         if [ -f "$STATE_FILE" ]; then
             AP_STATE=$(cat "$STATE_FILE")
             log_message "Found saved AP state: $AP_STATE"
-            
+
             if [ "$AP_STATE" = "enabled" ]; then
                 log_message "Starting Access Point services..."
+
+                # Prepare wlan0 interface
+                if ! prepare_wlan0; then
+                    log_message "ERROR: Failed to prepare wlan0 interface"
+                    exit 1
+                fi
+
+                # Start services in correct order
                 systemctl start dnsmasq
                 sleep 2
                 systemctl start hostapd
-                sleep 2
-                
+                sleep 3
+
                 if systemctl is-active --quiet hostapd && systemctl is-active --quiet dnsmasq; then
                     log_message "Access Point started successfully"
                 else
-                    log_message "ERROR: Failed to start Access Point"
+                    log_message "ERROR: Failed to start Access Point services"
+                    log_message "hostapd status: $(systemctl is-active hostapd)"
+                    log_message "dnsmasq status: $(systemctl is-active dnsmasq)"
+                    exit 1
                 fi
             else
                 log_message "AP state is disabled - not starting"
@@ -587,8 +636,21 @@ case "$1" in
                 systemctl stop dnsmasq 2>/dev/null || true
             fi
         else
-            log_message "No saved AP state found - defaulting to disabled"
-            echo "disabled" > "$STATE_FILE"
+            log_message "No saved AP state found - checking for hostapd config"
+            # If no state file but hostapd.conf exists, assume AP should be enabled
+            if [ -f "/etc/hostapd/hostapd.conf" ]; then
+                log_message "Found hostapd config, enabling AP"
+                echo "enabled" > "$STATE_FILE"
+                prepare_wlan0
+                systemctl start dnsmasq
+                sleep 2
+                systemctl start hostapd
+                sleep 3
+                log_message "Access Point auto-enabled and started"
+            else
+                log_message "No hostapd config found, defaulting to disabled"
+                echo "disabled" > "$STATE_FILE"
+            fi
         fi
         ;;
     "enable")
@@ -597,6 +659,8 @@ case "$1" in
         systemctl unmask hostapd
         systemctl enable hostapd
         systemctl enable dnsmasq
+
+        prepare_wlan0
         systemctl start dnsmasq
         sleep 2
         systemctl start hostapd
