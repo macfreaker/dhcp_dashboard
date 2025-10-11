@@ -468,40 +468,67 @@ EOF
 cat > /usr/local/bin/start-dashboard-system.sh << 'EOF'
 #!/bin/bash
 
-echo "Starting DHCP Dashboard System..."
+LOG_FILE="/var/log/dashboard-system.log"
+echo "$(date): Starting DHCP Dashboard System..." >> "$LOG_FILE"
 
 # 1. Prepare wlan0 and start AP
-echo "Starting Access Point..."
-/usr/local/bin/ap-manager.sh start
+echo "$(date): Starting Access Point..." >> "$LOG_FILE"
+/usr/local/bin/ap-manager.sh start >> "$LOG_FILE" 2>&1
 
-# Wait for AP to be ready
-sleep 5
+# Check if AP started
+sleep 3
+if systemctl is-active --quiet hostapd && systemctl is-active --quiet dnsmasq; then
+    echo "$(date): AP started successfully" >> "$LOG_FILE"
+else
+    echo "$(date): AP failed to start, retrying..." >> "$LOG_FILE"
+    /usr/local/bin/ap-manager.sh start >> "$LOG_FILE" 2>&1
+    sleep 3
+fi
 
 # 2. Check if wlan1 should be configured for internet
 if [ -f "/etc/wpa_supplicant/wpa_supplicant-wlan1.conf" ]; then
-    echo "Configuring wlan1 for internet access..."
+    echo "$(date): Configuring wlan1 for internet access..." >> "$LOG_FILE"
     # Set wlan1 to managed mode
-    iw wlan1 set type managed 2>/dev/null || true
-    ip link set wlan1 up 2>/dev/null || true
+    iw wlan1 set type managed 2>/dev/null || echo "$(date): Warning: Could not set wlan1 type" >> "$LOG_FILE"
+    ip link set wlan1 up 2>/dev/null || echo "$(date): Warning: Could not bring up wlan1" >> "$LOG_FILE"
 
     # Start wpa_supplicant on wlan1
-    systemctl start wpa_supplicant@wlan1 2>/dev/null || true
-    sleep 3
+    systemctl start wpa_supplicant@wlan1 2>/dev/null || echo "$(date): Warning: Could not start wpa_supplicant@wlan1" >> "$LOG_FILE"
+    sleep 5
 
     # Enable internet sharing if wlan1 gets connected
     if iwgetid wlan1 -r &>/dev/null; then
-        echo "wlan1 connected, enabling internet sharing..."
-        /usr/local/bin/enable-internet-sharing.sh
+        echo "$(date): wlan1 connected, enabling internet sharing..." >> "$LOG_FILE"
+        /usr/local/bin/enable-internet-sharing.sh >> "$LOG_FILE" 2>&1
+    else
+        echo "$(date): wlan1 not connected, skipping internet sharing" >> "$LOG_FILE"
     fi
+else
+    echo "$(date): No wlan1 config found, skipping internet setup" >> "$LOG_FILE"
 fi
 
 # 3. Start the dashboard
-echo "Starting web dashboard..."
-cd /home/pi/dhcp_dashboard
-/usr/bin/python3 dhcp_dashboard.py &
-echo $! > /var/run/dhcp-dashboard.pid
+echo "$(date): Starting web dashboard..." >> "$LOG_FILE"
+# Use the correct path - get from script location
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_DIR="$(dirname "$SCRIPT_DIR")/dhcp_dashboard"
+cd "$APP_DIR" || echo "$(date): Warning: Could not cd to $APP_DIR" >> "$LOG_FILE"
 
-echo "DHCP Dashboard System started successfully"
+# Start dashboard in background
+/usr/bin/python3 dhcp_dashboard.py >> "$LOG_FILE" 2>&1 &
+DASHBOARD_PID=$!
+echo $DASHBOARD_PID > /var/run/dhcp-dashboard.pid
+echo "$(date): Dashboard started with PID $DASHBOARD_PID" >> "$LOG_FILE"
+
+# Verify dashboard is running
+sleep 2
+if kill -0 $DASHBOARD_PID 2>/dev/null; then
+    echo "$(date): Dashboard is running" >> "$LOG_FILE"
+else
+    echo "$(date): Warning: Dashboard may not have started properly" >> "$LOG_FILE"
+fi
+
+echo "$(date): DHCP Dashboard System startup complete" >> "$LOG_FILE"
 EOF
 
 # Create the stop script
@@ -578,6 +605,14 @@ systemctl enable dhcp-dashboard-system.service
 # Disable individual services to avoid conflicts
 systemctl disable dhcp-dashboard.service 2>/dev/null || true
 systemctl disable ap-state-manager.service 2>/dev/null || true
+
+# Create log directory
+mkdir -p /var/log
+touch /var/log/dashboard-system.log
+chmod 644 /var/log/dashboard-system.log
+
+# Create run directory for PID file
+mkdir -p /var/run
 
 print_success "Systemd service file created at /etc/systemd/system/${SERVICE_NAME}.service"
 echo ""
