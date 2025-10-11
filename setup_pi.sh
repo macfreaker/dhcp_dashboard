@@ -6,11 +6,18 @@
 # This script performs complete installation and configuration of the DHCP
 # Dashboard application with automatic startup on boot.
 #
-# Usage:
-#   Online mode (default):  sudo bash setup_pi.sh
-#   Offline mode:           sudo bash setup_pi.sh --offline
+# USAGE MODES:
+#   🌐 Online (default):    sudo bash setup_pi.sh
+#                         - Downloads all packages automatically
+#                         - Requires internet connection
+#                         - Fully automated setup
 #
-# Offline mode requires packages to be pre-installed. See README.md for details.
+#   📦 Offline:            sudo bash setup_pi.sh --offline
+#                         - Uses pre-installed packages
+#                         - No internet required
+#                         - Requires package pre-loading (see README.md)
+#
+# For detailed instructions, see README.md Installation section.
 ################################################################################
 
 set -e  # Exit on any error
@@ -49,19 +56,46 @@ print_error() {
 }
 
 ################################################################################
-# Check Prerequisites and Offline Mode
+# Installation Mode Selection and Prerequisites
 ################################################################################
 
-print_status "Starting DHCP Dashboard installation..."
+echo "=========================================="
+echo "DHCP Dashboard - Raspberry Pi Setup"
+echo "=========================================="
 echo ""
 
 # Check for offline mode flag
 OFFLINE_MODE=false
 if [ "$1" = "--offline" ] || [ "$1" = "-o" ]; then
     OFFLINE_MODE=true
-    print_warning "Running in OFFLINE mode - skipping internet-dependent operations"
+    echo -e "${YELLOW}📦 OFFLINE INSTALLATION MODE${NC}"
+    echo -e "${BLUE}This mode assumes packages are pre-installed.${NC}"
+    echo -e "${BLUE}Use 'sudo bash preload_packages.sh' on a connected system first.${NC}"
+    echo ""
+else
+    echo -e "${GREEN}🌐 ONLINE INSTALLATION MODE${NC}"
+    echo -e "${BLUE}This mode will download and install all required packages.${NC}"
+    echo -e "${BLUE}Internet connection required.${NC}"
     echo ""
 fi
+
+print_status "Starting DHCP Dashboard installation..."
+echo ""
+
+# Check if running as root
+if [ "$EUID" -ne 0 ]; then
+    print_error "This script must be run as root (use sudo)"
+    exit 1
+fi
+
+# Check if Python 3 is installed
+if ! command -v python3 &> /dev/null; then
+    print_error "Python 3 is not installed. Please install Python 3 first."
+    exit 1
+fi
+
+print_success "Prerequisites check passed"
+echo ""
 
 # Check if running as root
 if [ "$EUID" -ne 0 ]; then
@@ -107,66 +141,73 @@ fi
 # Install Required Packages
 ################################################################################
 
-print_status "Checking/installing required packages (dnsmasq, hostapd)..."
+if [ "$OFFLINE_MODE" = true ]; then
+    print_status "🔍 OFFLINE MODE: Checking for pre-installed packages..."
+else
+    print_status "📦 ONLINE MODE: Installing required packages (dnsmasq, hostapd)..."
+fi
 
 # Install dnsmasq (DHCP/DNS server)
 if ! dpkg -l | grep -q "^ii  dnsmasq "; then
     if [ "$OFFLINE_MODE" = true ]; then
-        print_error "dnsmasq not installed and running in offline mode!"
-        print_error "Please pre-install dnsmasq before running setup:"
-        echo "  sudo apt-get update && sudo apt-get install -y dnsmasq"
+        print_error "❌ dnsmasq not found!"
+        print_error "OFFLINE MODE: Please pre-install dnsmasq:"
+        echo "  On connected system: sudo apt-get update && sudo apt-get install -y dnsmasq"
+        echo "  Then transfer packages using: sudo bash preload_packages.sh"
         exit 1
     else
-        print_status "Installing dnsmasq..."
+        print_status "⬇️  Downloading and installing dnsmasq..."
         if apt-get install -y dnsmasq; then
-            print_success "dnsmasq installed"
+            print_success "✅ dnsmasq installed successfully"
         else
-            print_error "Failed to install dnsmasq"
+            print_error "❌ Failed to install dnsmasq"
             exit 1
         fi
     fi
 else
-    print_success "dnsmasq already installed"
+    print_success "✅ dnsmasq already installed"
 fi
 
 # Install hostapd (Access Point software)
 if ! dpkg -l | grep -q "^ii  hostapd "; then
     if [ "$OFFLINE_MODE" = true ]; then
-        print_error "hostapd not installed and running in offline mode!"
-        print_error "Please pre-install hostapd before running setup:"
-        echo "  sudo apt-get update && sudo apt-get install -y hostapd"
+        print_error "❌ hostapd not found!"
+        print_error "OFFLINE MODE: Please pre-install hostapd:"
+        echo "  On connected system: sudo apt-get update && sudo apt-get install -y hostapd"
+        echo "  Then transfer packages using: sudo bash preload_packages.sh"
         exit 1
     else
-        print_status "Installing hostapd..."
+        print_status "⬇️  Downloading and installing hostapd..."
         if apt-get install -y hostapd; then
-            print_success "hostapd installed"
+            print_success "✅ hostapd installed successfully"
         else
-            print_error "Failed to install hostapd"
+            print_error "❌ Failed to install hostapd"
             exit 1
         fi
     fi
 else
-    print_success "hostapd already installed"
+    print_success "✅ hostapd already installed"
 fi
 
 # Install Python pip if not present
 if ! command -v pip3 &> /dev/null; then
     if [ "$OFFLINE_MODE" = true ]; then
-        print_error "python3-pip not installed and running in offline mode!"
-        print_error "Please pre-install python3-pip before running setup:"
-        echo "  sudo apt-get update && sudo apt-get install -y python3-pip"
+        print_error "❌ python3-pip not found!"
+        print_error "OFFLINE MODE: Please pre-install python3-pip:"
+        echo "  On connected system: sudo apt-get update && sudo apt-get install -y python3-pip"
+        echo "  Then transfer packages using: sudo bash preload_packages.sh"
         exit 1
     else
-        print_status "Installing python3-pip..."
+        print_status "⬇️  Downloading and installing python3-pip..."
         if apt-get install -y python3-pip; then
-            print_success "pip3 installed"
+            print_success "✅ python3-pip installed successfully"
         else
-            print_error "Failed to install python3-pip"
+            print_error "❌ Failed to install python3-pip"
             exit 1
         fi
     fi
 else
-    print_success "python3-pip already installed"
+    print_success "✅ python3-pip already installed"
 fi
 
 echo ""
@@ -175,46 +216,54 @@ echo ""
 # Install Python Dependencies
 ################################################################################
 
-print_status "Checking/installing Python dependencies..."
+if [ "$OFFLINE_MODE" = true ]; then
+    print_status "🔍 OFFLINE MODE: Checking for pre-installed Python dependencies..."
+else
+    print_status "🐍 Installing Python dependencies..."
+fi
+
 cd "$APP_DIR"
 
 if [ -f "requirements.txt" ]; then
     # Check if Flask is already installed (main dependency)
     if python3 -c "import flask" 2>/dev/null; then
-        print_success "Python dependencies already installed"
+        print_success "✅ Python dependencies already installed"
     else
         if [ "$OFFLINE_MODE" = true ]; then
-            print_error "Python dependencies not installed and running in offline mode!"
-            print_error "Please pre-install Python dependencies before running setup:"
+            print_error "❌ Python dependencies not found!"
+            print_error "OFFLINE MODE: Please pre-install Python dependencies:"
             echo "  pip3 install -r requirements.txt --break-system-packages"
             echo "  Or manually: pip3 install flask --break-system-packages"
+            echo ""
+            print_error "If using pre-loaded packages, try:"
+            echo "  sudo pip3 install --no-index --find-links=/tmp/dhcp-dashboard-packages/python-packages -r requirements.txt --break-system-packages"
             exit 1
         else
-            print_status "Installing Python dependencies from requirements.txt..."
+            print_status "⬇️  Downloading and installing Python dependencies..."
             if pip3 install -r requirements.txt --break-system-packages; then
-                print_success "Python dependencies installed"
+                print_success "✅ Python dependencies installed successfully"
             else
-                print_error "Failed to install Python dependencies"
+                print_error "❌ Failed to install Python dependencies"
                 exit 1
             fi
         fi
     fi
 else
-    print_warning "requirements.txt not found, checking for Flask..."
+    print_warning "⚠️  requirements.txt not found, checking for Flask..."
     if python3 -c "import flask" 2>/dev/null; then
-        print_success "Flask already installed"
+        print_success "✅ Flask already installed"
     else
         if [ "$OFFLINE_MODE" = true ]; then
-            print_error "Flask not installed and running in offline mode!"
-            print_error "Please pre-install Flask before running setup:"
+            print_error "❌ Flask not found!"
+            print_error "OFFLINE MODE: Please pre-install Flask:"
             echo "  pip3 install flask --break-system-packages"
             exit 1
         else
-            print_status "Installing Flask manually..."
+            print_status "⬇️  Downloading and installing Flask..."
             if pip3 install flask --break-system-packages; then
-                print_success "Flask installed"
+                print_success "✅ Flask installed successfully"
             else
-                print_error "Failed to install Flask"
+                print_error "❌ Failed to install Flask"
                 exit 1
             fi
         fi
@@ -740,9 +789,19 @@ print_status "Getting network information..."
 IP_ADDRESS=$(hostname -I | awk '{print $1}')
 
 echo ""
-print_success "=========================================="
-print_success "INSTALLATION COMPLETED SUCCESSFULLY!"
-print_success "=========================================="
+if [ "$OFFLINE_MODE" = true ]; then
+    print_success "=========================================="
+    print_success "OFFLINE INSTALLATION COMPLETED!"
+    print_success "=========================================="
+    echo ""
+    echo -e "${GREEN}📦 Installation Mode:${NC} Offline (Pre-loaded packages)"
+else
+    print_success "=========================================="
+    print_success "ONLINE INSTALLATION COMPLETED!"
+    print_success "=========================================="
+    echo ""
+    echo -e "${GREEN}🌐 Installation Mode:${NC} Online (Downloaded packages)"
+fi
 echo ""
 echo -e "${GREEN}Dashboard URL:${NC} http://${IP_ADDRESS}:8080"
 echo -e "${GREEN}or:${NC} http://$(hostname).local:8080"

@@ -227,104 +227,237 @@ The API follows OpenAPI 3.0 standards, accessible at: `http://192.168.4.1:8080/a
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Installation
 
-### ⚡ Automated Setup (Recommended)
+Choose the installation method that best fits your environment:
 
-Use the automated setup script for complete installation and auto-start configuration:
+### 📡 Method 1: Online Installation (Recommended)
 
-```bash
-# Clone this repository
-git clone <repository-url>
-cd dhcp_dashboard
+**Best for:** Systems with internet access. Fully automated setup with automatic package downloads.
 
-# Run the setup script (requires sudo)
-sudo bash setup_pi.sh
+#### Prerequisites
+- Raspberry Pi with internet access
+- sudo privileges
+
+#### Installation Steps
+
+1. **Clone the repository:**
+   ```bash
+   git clone <repository-url>
+   cd dhcp_dashboard
+   ```
+
+2. **Run the automated setup:**
+   ```bash
+   sudo bash setup_pi.sh
+   ```
+
+3. **Follow the interactive prompts:**
+   - Enter your desired Access Point name (SSID)
+   - Enter your desired Access Point password (minimum 8 characters)
+   - The script will handle everything else automatically
+
+#### What the Online Setup Does
+- ✅ Downloads and installs system packages (dnsmasq, hostapd, python3-pip)
+- ✅ Downloads and installs Python dependencies
+- ✅ Fixes Access Point setup issues (unmasks hostapd, resolves conflicts)
+- ✅ Cleans existing DHCP hosts with improved pattern matching
+- ✅ Sets up AP state persistence across reboots
+- ✅ Resolves service conflicts (NetworkManager, wpa_supplicant)
+- ✅ Creates systemd service for auto-start on boot
+- ✅ Configures sudo permissions for system commands
+- ✅ Starts the application automatically
+- ✅ Displays access URL and service management commands
+
+#### Expected Output
+```
+==========================================
+INSTALLATION COMPLETED SUCCESSFULLY!
+==========================================
+
+Dashboard URL: http://192.168.4.1:8080
+Your Access Point is now running:
+  - SSID: RaspberryPi-AP
+  - Password: [as configured]
+  - AP IP: 192.168.4.1
 ```
 
-**The enhanced setup script will:**
-- ✅ Install all required packages (dnsmasq, hostapd, python3-pip)
-- ✅ Install Python dependencies from requirements.txt
-- ✅ **Fix Access Point setup issues** (unmask hostapd, resolve conflicts)
-- ✅ **Clean existing DHCP hosts** with improved pattern matching
-- ✅ **Setup AP state persistence** across reboots
-- ✅ **Resolve service conflicts** (NetworkManager, wpa_supplicant)
-- ✅ Create systemd service for auto-start on boot
-- ✅ Configure sudo permissions for system commands
-- ✅ Start the application automatically
-- ✅ Display access URL and service management commands
+---
 
-### 🔧 Manual Setup
+### 🔌 Method 2: Offline Installation (No Internet)
 
-If you prefer manual installation:
+**Best for:** Air-gapped systems, isolated networks, or systems without internet access.
 
-1. **Install prerequisites:**
+#### Prerequisites
+- Two Raspberry Pi systems: one with internet (for package preparation), one without
+- USB drive or network transfer capability between systems
+- sudo privileges on both systems
+
+#### Step 1: Prepare Packages (On Connected System)
+
+1. **Clone repository on connected system:**
+   ```bash
+   git clone <repository-url>
+   cd dhcp_dashboard
+   ```
+
+2. **Pre-load all required packages:**
+   ```bash
+   sudo bash preload_packages.sh
+   ```
+
+   This creates `/var/cache/dhcp-dashboard-packages/` containing:
+   - All required `.deb` packages (dnsmasq, hostapd, python3-pip)
+   - Python packages from `requirements.txt`
+   - Complete offline installation instructions
+
+#### Step 2: Transfer Files to Offline System
+
+1. **Copy the package cache:**
+   ```bash
+   # Using scp (if network available between systems)
+   scp -r /var/cache/dhcp-dashboard-packages user@offline-pi:/tmp/
+
+   # Or using USB drive
+   cp -r /var/cache/dhcp-dashboard-packages /media/usb/
+   # Then copy from USB to offline system
+   ```
+
+2. **Copy the application code:**
+   ```bash
+   # Copy the entire dhcp_dashboard directory to offline system
+   scp -r dhcp_dashboard user@offline-pi:/home/user/
+   ```
+
+#### Step 3: Install on Offline System
+
+1. **Navigate to the application directory:**
+   ```bash
+   cd /home/user/dhcp_dashboard
+   ```
+
+2. **Install system packages from cache:**
+   ```bash
+   cd /tmp/dhcp-dashboard-packages
+   sudo dpkg -i *.deb
+   sudo apt-get install -f -y  # Fix any dependency issues
+   ```
+
+3. **Install Python packages (if cached):**
+   ```bash
+   sudo pip3 install --no-index --find-links=/tmp/dhcp-dashboard-packages/python-packages -r requirements.txt --break-system-packages
+   ```
+
+4. **Run setup in offline mode:**
+   ```bash
+   cd /home/user/dhcp_dashboard
+   sudo bash setup_pi.sh --offline
+   ```
+
+5. **Follow the interactive prompts:**
+   - Enter your desired Access Point name (SSID)
+   - Enter your desired Access Point password (minimum 8 characters)
+
+#### Offline Mode Features
+- ✅ Skips all internet-dependent operations (`apt-get update/upgrade`)
+- ✅ Checks if packages are already installed before attempting installation
+- ✅ Provides clear error messages if required packages are missing
+- ✅ Works with pre-installed packages from the cache
+- ✅ Same interactive AP configuration as online mode
+
+#### Troubleshooting Offline Installation
+- **Missing packages:** If `dpkg -i` fails, ensure all dependencies are in the cache
+- **Python packages:** May need manual installation if cache is incomplete
+- **Network issues:** Ensure all files are properly transferred
+
+---
+
+### 🔧 Method 3: Manual Installation
+
+**Best for:** Custom installations, development environments, or when you need full control.
+
+#### Prerequisites
+- Raspberry Pi with internet access (for manual downloads)
+- sudo privileges
+- Basic Linux knowledge
+
+#### Installation Steps
+
+1. **Update system and install prerequisites:**
    ```bash
    sudo apt-get update
    sudo apt-get install -y dnsmasq hostapd python3-pip
    ```
 
-2. **Clone and install dependencies:**
+2. **Clone repository:**
    ```bash
    git clone <repository-url>
    cd dhcp_dashboard
-   pip3 install -r requirements.txt
    ```
 
-3. **Run manually:**
+3. **Install Python dependencies:**
+   ```bash
+   pip3 install -r requirements.txt --break-system-packages
+   ```
+
+4. **Run the application manually:**
    ```bash
    sudo python3 dhcp_dashboard.py
    ```
-   *Note: sudo required for system-level network configuration*
 
-4. **Access the dashboard:**
+5. **Access the dashboard:**
    - Open browser: `http://your-raspberry-pi-ip:8080`
+   - Note: Manual mode doesn't configure AP automatically
 
-### 🔌 Offline Installation (No Internet Required)
+#### Manual Mode Limitations
+- No automatic AP configuration
+- No systemd service setup
+- No sudo permissions configuration
+- Requires manual network setup
+- Not recommended for production use
 
-For Raspberry Pi systems without internet access, you can pre-load all required packages on a connected system and then transfer them for offline installation.
+---
 
-#### Step 1: Pre-load Packages (On Connected System)
+### 📋 Installation Method Comparison
+
+| Feature | Online | Offline | Manual |
+|---------|--------|---------|--------|
+| **Internet Required** | ✅ Yes | ❌ No (pre-load required) | ✅ Yes |
+| **Automation Level** | ⭐⭐⭐ Full | ⭐⭐⭐ Full | ⭐ Basic |
+| **AP Auto-Setup** | ✅ Yes | ✅ Yes | ❌ No |
+| **Systemd Service** | ✅ Yes | ✅ Yes | ❌ No |
+| **Interactive Setup** | ✅ Yes | ✅ Yes | ❌ No |
+| **Complexity** | ⭐⭐⭐ Simple | ⭐⭐ Medium | ⭐⭐⭐ Complex |
+| **Best For** | New setups | Air-gapped systems | Development/Custom |
+
+---
+
+### ⚙️ Post-Installation Service Management
+
+After successful installation, manage the service with systemd:
 
 ```bash
-# Run the package pre-loader script
-sudo bash preload_packages.sh
+# Check service status
+sudo systemctl status dhcp-dashboard
+
+# Start the service
+sudo systemctl start dhcp-dashboard
+
+# Stop the service
+sudo systemctl stop dhcp-dashboard
+
+# Restart the service
+sudo systemctl restart dhcp-dashboard
+
+# View live logs
+sudo journalctl -u dhcp-dashboard -f
+
+# Disable auto-start on boot
+sudo systemctl disable dhcp-dashboard
+
+# Re-enable auto-start on boot
+sudo systemctl enable dhcp-dashboard
 ```
-
-This creates `/var/cache/dhcp-dashboard-packages/` with:
-- All required `.deb` packages (dnsmasq, hostapd, python3-pip)
-- Python packages from `requirements.txt`
-- Complete offline installation instructions
-
-#### Step 2: Transfer to Offline System
-
-```bash
-# Copy the entire cache directory to your offline Raspberry Pi
-scp -r /var/cache/dhcp-dashboard-packages user@offline-pi:/tmp/
-```
-
-#### Step 3: Install on Offline System
-
-```bash
-# Install system packages from cache
-cd /tmp/dhcp-dashboard-packages
-sudo dpkg -i *.deb
-sudo apt-get install -f -y  # Fix any dependency issues
-
-# Install Python packages (if cached)
-sudo pip3 install --no-index --find-links=/tmp/dhcp-dashboard-packages/python-packages -r requirements.txt --break-system-packages
-
-# Run setup in offline mode
-sudo bash setup_pi.sh --offline
-```
-
-**Offline Mode Features:**
-- ✅ Skips all internet-dependent operations (`apt-get update/upgrade`)
-- ✅ Checks if packages are already installed before attempting installation
-- ✅ Provides clear error messages if required packages are missing
-- ✅ Works with pre-installed packages from the cache
-
-**Note:** Python packages may need to be installed manually if the cache doesn't include all dependencies.
 
 ### ⚙️ Service Management
 

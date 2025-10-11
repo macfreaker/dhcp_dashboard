@@ -70,35 +70,94 @@ After running the modified setup script:
 
 ## Offline Installation Support
 
-The setup script now supports offline installation for systems without internet access:
+The setup script now supports **three distinct installation methods** with clear visual feedback:
 
-### Usage
+### Installation Methods
+
+#### 🌐 Method 1: Online Installation (Default)
 ```bash
-# Online mode (default)
 sudo bash setup_pi.sh
+```
+- Downloads all packages automatically
+- Requires internet connection
+- Fully automated with visual progress indicators
+- Shows "🌐 ONLINE INSTALLATION MODE" header
 
-# Offline mode (requires pre-installed packages)
+#### 📦 Method 2: Offline Installation
+```bash
 sudo bash setup_pi.sh --offline
 ```
+- Uses pre-installed packages only
+- No internet required
+- Shows "📦 OFFLINE INSTALLATION MODE" header
+- Requires package pre-loading (see below)
 
-### Pre-loading Packages
+#### 🔧 Method 3: Manual Installation
+- For development/custom setups
+- Requires manual package installation
+- No automated AP configuration
+
+### Pre-loading Packages for Offline Installation
+
 Use the `preload_packages.sh` script to download and cache all required packages on a connected system:
 
 ```bash
-# On a connected Raspberry Pi
+# On a connected Raspberry Pi with internet
 sudo bash preload_packages.sh
 
 # This creates /var/cache/dhcp-dashboard-packages/
 # with all required .deb and Python packages
 ```
 
-### Offline Installation Process
-1. Pre-load packages on connected system
-2. Transfer cache directory to offline system
-3. Install packages from cache
-4. Run setup with `--offline` flag
+### Complete Offline Workflow
 
-See README.md for complete offline installation instructions.
+1. **On Connected System:**
+   ```bash
+   git clone <repo-url>
+   cd dhcp_dashboard
+   sudo bash preload_packages.sh
+   ```
+
+2. **Transfer to Offline System:**
+   ```bash
+   scp -r /var/cache/dhcp-dashboard-packages user@offline-pi:/tmp/
+   scp -r dhcp_dashboard user@offline-pi:/home/user/
+   ```
+
+3. **On Offline System:**
+   ```bash
+   cd /tmp/dhcp-dashboard-packages
+   sudo dpkg -i *.deb
+   sudo apt-get install -f -y
+
+   cd /home/user/dhcp_dashboard
+   sudo pip3 install --no-index --find-links=/tmp/dhcp-dashboard-packages/python-packages -r requirements.txt --break-system-packages
+   sudo bash setup_pi.sh --offline
+   ```
+
+### Visual Feedback
+
+The setup script now provides clear visual indicators:
+
+**Online Mode:**
+```
+🌐 ONLINE INSTALLATION MODE
+⬇️  Downloading and installing dnsmasq...
+✅ dnsmasq installed successfully
+```
+
+**Offline Mode:**
+```
+📦 OFFLINE INSTALLATION MODE
+🔍 OFFLINE MODE: Checking for pre-installed packages...
+✅ dnsmasq already installed
+```
+
+**Completion Messages:**
+- Online: "ONLINE INSTALLATION COMPLETED!"
+- Offline: "OFFLINE INSTALLATION COMPLETED!"
+
+See README.md Installation section for complete, detailed instructions for each method.
 
 ## Troubleshooting
 
