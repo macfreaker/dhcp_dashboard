@@ -189,6 +189,47 @@ else
     print_success "✅ hostapd already installed"
 fi
 
+# Install dhcpcd (DHCP client) if not present
+if ! command -v dhcpcd &> /dev/null && ! systemctl list-units --all | grep -q dhcpcd; then
+    if [ "$OFFLINE_MODE" = true ]; then
+        print_error "❌ dhcpcd not found!"
+        print_error "OFFLINE MODE: Please pre-install dhcpcd:"
+        echo "  On connected system: sudo apt-get update && sudo apt-get install -y dhcpcd5"
+        echo "  Then transfer packages using: sudo bash preload_packages.sh"
+        exit 1
+    else
+        print_status "⬇️  Downloading and installing dhcpcd..."
+        if apt-get install -y dhcpcd5; then
+            print_success "✅ dhcpcd installed successfully"
+        else
+            print_error "❌ Failed to install dhcpcd"
+            exit 1
+        fi
+    fi
+else
+    print_success "✅ dhcpcd already available"
+fi
+
+# Install iptables if not present
+if ! command -v iptables &> /dev/null; then
+    if [ "$OFFLINE_MODE" = true ]; then
+        print_error "❌ iptables not found!"
+        print_error "OFFLINE MODE: Please pre-install iptables:"
+        echo "  On connected system: sudo apt-get update && sudo apt-get install -y iptables"
+        echo "  Then transfer packages using: sudo bash preload_packages.sh"
+        exit 1
+    else
+        print_status "⬇️  Downloading and installing iptables..."
+        if apt-get install -y iptables; then
+            print_success "✅ iptables installed successfully"
+        else
+            print_warning "⚠️  Failed to install iptables - NAT routing may not work"
+        fi
+    fi
+else
+    print_success "✅ iptables already installed"
+fi
+
 # Install Python pip if not present
 if ! command -v pip3 &> /dev/null; then
     if [ "$OFFLINE_MODE" = true ]; then
@@ -303,12 +344,26 @@ print_status "Fixing Access Point setup issues and service conflicts..."
 print_status "Unmasking hostapd service..."
 systemctl unmask hostapd 2>/dev/null || true
 
-# 2. Stop and disable NetworkManager (conflicts with hostapd)
+# 2. Handle NetworkManager carefully - only disable if not managing Ethernet
 if systemctl is-active --quiet NetworkManager; then
-    print_status "Disabling NetworkManager (conflicts with hostapd)..."
-    systemctl stop NetworkManager 2>/dev/null || true
-    systemctl disable NetworkManager 2>/dev/null || true
-    print_success "NetworkManager disabled"
+    # Check if NetworkManager is managing eth0
+    if nmcli device status | grep -q "eth0.*connected"; then
+        print_warning "NetworkManager is managing Ethernet - keeping it enabled for internet access"
+        print_status "Configuring NetworkManager to ignore wlan0..."
+        # Create NetworkManager config to ignore wlan0
+        mkdir -p /etc/NetworkManager/conf.d/
+        cat > /etc/NetworkManager/conf.d/wlan0-ignore.conf << 'EOF'
+[keyfile]
+unmanaged-devices=interface-name:wlan0
+EOF
+        systemctl reload NetworkManager 2>/dev/null || true
+        print_success "NetworkManager configured to ignore wlan0"
+    else
+        print_status "Disabling NetworkManager (not managing Ethernet)..."
+        systemctl stop NetworkManager 2>/dev/null || true
+        systemctl disable NetworkManager 2>/dev/null || true
+        print_success "NetworkManager disabled"
+    fi
 fi
 
 # 3. Configure wpa_supplicant to avoid wlan0 conflicts
@@ -739,15 +794,20 @@ if ! grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf; then
 fi
 sysctl -p > /dev/null 2>&1
 
-# Configure iptables for NAT
-print_status "Setting up NAT routing..."
-iptables -t nat -F POSTROUTING 2>/dev/null || true
-iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
-iptables -A FORWARD -i eth0 -o wlan0 -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
-iptables -A FORWARD -i wlan0 -o eth0 -j ACCEPT 2>/dev/null || true
+# Configure iptables for NAT (only if iptables is available)
+if command -v iptables &> /dev/null; then
+    print_status "Setting up NAT routing..."
+    iptables -t nat -F POSTROUTING 2>/dev/null || true
+    iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+    iptables -A FORWARD -i eth0 -o wlan0 -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+    iptables -A FORWARD -i wlan0 -o eth0 -j ACCEPT 2>/dev/null || true
 
-# Save iptables rules
-sh -c "iptables-save > /etc/iptables.ipv4.nat" 2>/dev/null
+    # Save iptables rules
+    sh -c "iptables-save > /etc/iptables.ipv4.nat" 2>/dev/null
+    print_success "NAT routing configured"
+else
+    print_warning "iptables not available - internet sharing will not work"
+fi
 
 # Add iptables restore to rc.local if not present
 if [ -f /etc/rc.local ] && ! grep -q "iptables-restore" /etc/rc.local; then
@@ -827,15 +887,44 @@ print_status "Restarting networking services..."
 systemctl daemon-reload
 
 # Restart dhcpcd to apply new configuration
-systemctl restart dhcpcd 2>/dev/null || true
+systemctl restart dhcpcd 2>/dev/null || systemctl restart dhcpcd5 2>/dev/null || true
 sleep 2
 
+# Ensure wlan0 is up and configured
+print_status "Ensuring wlan0 interface is ready..."
+if ip link show wlan0 &>/dev/null; then
+    # Set regulatory domain
+    iw reg set US 2>/dev/null || true
+    # Set interface type and bring up
+    iw wlan0 set type managed 2>/dev/null || true
+    ip link set wlan0 up
+    # Assign static IP if dhcpcd didn't
+    if ! ip addr show wlan0 | grep -q "192.168.4.1"; then
+        ip addr add 192.168.4.1/24 dev wlan0 2>/dev/null || true
+    fi
+    print_success "wlan0 interface configured"
+else
+    print_warning "wlan0 interface not found - AP functionality may not work"
+fi
+
 # Start dnsmasq
-systemctl restart dnsmasq
+if systemctl restart dnsmasq; then
+    print_success "dnsmasq started successfully"
+else
+    print_error "Failed to start dnsmasq"
+    journalctl -u dnsmasq -n 5
+    exit 1
+fi
 sleep 2
 
 # Start hostapd
-systemctl restart hostapd
+if systemctl restart hostapd; then
+    print_success "hostapd started successfully"
+else
+    print_error "Failed to start hostapd"
+    journalctl -u hostapd -n 5
+    exit 1
+fi
 sleep 3
 
 # Check if AP services started successfully

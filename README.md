@@ -659,6 +659,90 @@ When you configure through the web interface:
 - **Pi IP**: `192.168.4.1` (gateway for local network)
 - **Internet**: Optional via wlan1 connection
 
+### 🔀 Alternative Network Configuration: Ethernet for Local Network
+
+**For advanced setups where you want Ethernet as local network and USB Wi-Fi for internet:**
+
+#### Network Layout
+- **wlan0**: Access Point for wireless local devices
+- **eth0**: Wired local network (DHCP server for connected hub/switch)
+- **wlan1 (USB)**: Internet connection in client mode
+
+#### Manual Configuration After Setup
+
+After running the standard setup script, modify the configuration:
+
+1. **Set up wlan1 for internet:**
+   ```bash
+   # Configure wlan1 as client
+   wpa_passphrase "YourWiFiSSID" "YourWiFiPassword" > /etc/wpa_supplicant/wpa_supplicant-wlan1.conf
+   sudo systemctl enable wpa_supplicant@wlan1
+   sudo systemctl start wpa_supplicant@wlan1
+   ```
+
+2. **Configure eth0 for local network:**
+   ```bash
+   # Add to /etc/dhcpcd.conf
+   interface eth0
+       static ip_address=192.168.5.1/24
+       nohook wpa_supplicant
+   ```
+
+3. **Update dnsmasq for both wlan0 and eth0:**
+   ```bash
+   # Add to /etc/dnsmasq.conf
+   interface=wlan0
+   dhcp-range=wlan0,192.168.4.10,192.168.4.50,255.255.255.0,24h
+   interface=eth0
+   dhcp-range=eth0,192.168.5.10,192.168.5.50,255.255.255.0,24h
+   ```
+
+4. **Update iptables for internet sharing via wlan1:**
+   ```bash
+   sudo iptables -t nat -F POSTROUTING
+   sudo iptables -t nat -A POSTROUTING -o wlan1 -j MASQUERADE
+   sudo iptables -A FORWARD -i wlan0 -o wlan1 -m state --state RELATED,ESTABLISHED -j ACCEPT
+   sudo iptables -A FORWARD -i wlan1 -o wlan0 -j ACCEPT
+   sudo iptables -A FORWARD -i eth0 -o wlan1 -m state --state RELATED,ESTABLISHED -j ACCEPT
+   sudo iptables -A FORWARD -i wlan1 -o eth0 -j ACCEPT
+   ```
+
+#### Resulting Network Topology
+
+```
+[Internet Router]
+      │
+      │ (Wi-Fi)
+      │
+   ┌──┴─────────────────────┐
+   │   Raspberry Pi         │
+   │   wlan0: 192.168.4.1   │ ← Access Point
+   │   eth0:  192.168.5.1   │ ← Local wired network
+   │   wlan1: DHCP          │ ← Internet client
+   └────────────────────────┘
+      │         │
+      │         └─────────────┐
+      │                       │
+[Wi-Fi]                [Hub/Switch]
+Clients                 │
+192.168.4.x         ┌───┴────┐
+                   │        │
+             [Device]  [Device]
+             192.168.5.x  192.168.5.x
+```
+
+#### Benefits of This Configuration
+- **Separate subnets**: Wireless (192.168.4.x) and wired (192.168.5.x) devices on different networks
+- **USB Wi-Fi for internet**: wlan1 handles internet connectivity
+- **Ethernet hub support**: Connect switches/hubs to eth0 for wired local network
+- **Flexible routing**: Can route between subnets or keep them isolated
+
+#### Notes
+- Requires USB Wi-Fi adapter for wlan1
+- Manual configuration needed after initial setup
+- Both subnets can access internet through wlan1
+- Dashboard accessible from any subnet at respective gateway IPs
+
 ---
 
 ## 📁 Configuration Files
