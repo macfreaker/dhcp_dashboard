@@ -893,6 +893,15 @@ sleep 2
 # Ensure wlan0 is up and configured
 print_status "Ensuring wlan0 interface is ready..."
 if ip link show wlan0 &>/dev/null; then
+    # Check and unblock RF-kill if needed
+    if command -v rfkill &> /dev/null; then
+        if rfkill list wifi | grep -q "blocked: yes"; then
+            print_status "Unblocking WiFi RF-kill..."
+            rfkill unblock wifi
+            sleep 2
+        fi
+    fi
+
     # Set regulatory domain
     iw reg set US 2>/dev/null || true
     # Set interface type and bring up
