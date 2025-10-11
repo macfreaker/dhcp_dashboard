@@ -66,6 +66,39 @@ After running the modified setup script:
 - ✅ Sensible defaults for quick deployment
 - ✅ Complete network isolation and internet sharing
 - ✅ Clear feedback during setup process
+- ✅ **Offline installation support** - works without internet access
+
+## Offline Installation Support
+
+The setup script now supports offline installation for systems without internet access:
+
+### Usage
+```bash
+# Online mode (default)
+sudo bash setup_pi.sh
+
+# Offline mode (requires pre-installed packages)
+sudo bash setup_pi.sh --offline
+```
+
+### Pre-loading Packages
+Use the `preload_packages.sh` script to download and cache all required packages on a connected system:
+
+```bash
+# On a connected Raspberry Pi
+sudo bash preload_packages.sh
+
+# This creates /var/cache/dhcp-dashboard-packages/
+# with all required .deb and Python packages
+```
+
+### Offline Installation Process
+1. Pre-load packages on connected system
+2. Transfer cache directory to offline system
+3. Install packages from cache
+4. Run setup with `--offline` flag
+
+See README.md for complete offline installation instructions.
 
 ## Troubleshooting
 

@@ -280,6 +280,52 @@ If you prefer manual installation:
 4. **Access the dashboard:**
    - Open browser: `http://your-raspberry-pi-ip:8080`
 
+### 🔌 Offline Installation (No Internet Required)
+
+For Raspberry Pi systems without internet access, you can pre-load all required packages on a connected system and then transfer them for offline installation.
+
+#### Step 1: Pre-load Packages (On Connected System)
+
+```bash
+# Run the package pre-loader script
+sudo bash preload_packages.sh
+```
+
+This creates `/var/cache/dhcp-dashboard-packages/` with:
+- All required `.deb` packages (dnsmasq, hostapd, python3-pip)
+- Python packages from `requirements.txt`
+- Complete offline installation instructions
+
+#### Step 2: Transfer to Offline System
+
+```bash
+# Copy the entire cache directory to your offline Raspberry Pi
+scp -r /var/cache/dhcp-dashboard-packages user@offline-pi:/tmp/
+```
+
+#### Step 3: Install on Offline System
+
+```bash
+# Install system packages from cache
+cd /tmp/dhcp-dashboard-packages
+sudo dpkg -i *.deb
+sudo apt-get install -f -y  # Fix any dependency issues
+
+# Install Python packages (if cached)
+sudo pip3 install --no-index --find-links=/tmp/dhcp-dashboard-packages/python-packages -r requirements.txt --break-system-packages
+
+# Run setup in offline mode
+sudo bash setup_pi.sh --offline
+```
+
+**Offline Mode Features:**
+- ✅ Skips all internet-dependent operations (`apt-get update/upgrade`)
+- ✅ Checks if packages are already installed before attempting installation
+- ✅ Provides clear error messages if required packages are missing
+- ✅ Works with pre-installed packages from the cache
+
+**Note:** Python packages may need to be installed manually if the cache doesn't include all dependencies.
+
 ### ⚙️ Service Management
 
 After setup, manage the service with systemd:
