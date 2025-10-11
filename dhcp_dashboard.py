@@ -191,6 +191,28 @@ def monitor_connections():
 logging.basicConfig(filename='dhcp_dashboard.log', level=logging.DEBUG)
 
 
+def auto_start_ap_on_boot():
+    """Auto-start AP if it should be enabled but isn't running (failsafe for boot issues)"""
+    try:
+        ap_config = read_ap_config()
+        ap_status = get_ap_status()
+
+        # Check if AP is configured but not active
+        if ap_config.get('ssid') and not ap_status.get('active', False):
+            logging.info(f"AP is configured (SSID: {ap_config['ssid']}) but not active - auto-starting...")
+            if start_access_point():
+                logging.info("AP auto-started successfully by dashboard")
+                # Flash message for next page load
+                flash("Access Point was not running - auto-started successfully.", "success")
+            else:
+                logging.error("Failed to auto-start AP")
+                flash("Failed to auto-start Access Point.", "error")
+        elif ap_config.get('ssid') and ap_status.get('active', False):
+            logging.info(f"AP is already active (SSID: {ap_config['ssid']})")
+    except Exception as e:
+        logging.error(f"Error in AP auto-start check: {str(e)}")
+
+
 def read_dhcp_hosts():
     try:
         with open(DNSMASQ_CONF, 'r') as f:
@@ -1023,6 +1045,9 @@ class ConnectionStats(Resource):
 
 @app.route('/', methods=['GET', 'POST'])
 def dashboard():
+    # Auto-start AP if needed (failsafe for boot issues)
+    auto_start_ap_on_boot()
+
     if request.method == 'POST':
         action = request.form.get('action')
         if action == 'add':
@@ -1931,6 +1956,9 @@ def dashboard():
                         <div>
                             <h3>Access Point Control</h3>
                             <p><strong>Status:</strong> <span class="status {% if ap_config.enabled %}status-active{% else %}status-inactive{% endif %}">{{ 'Active' if ap_config.enabled else 'Inactive' }}</span></p>
+                            {% if ap_config.ssid %}
+                            <p><strong>SSID:</strong> <code>{{ ap_config.ssid }}</code></p>
+                            {% endif %}
                             <div class="btn-group">
                                 <form method="post" style="display: inline;">
                                     <input type="hidden" name="action" value="start_ap">
